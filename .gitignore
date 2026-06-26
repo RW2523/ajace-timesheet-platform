@@ -6,12 +6,11 @@
 *.pem
 *.p12
 
-# ───────── real employee data (PII) — NEVER publish ─────────
-/Timesheet/
-/TimeSheet-May/
+# ───────── processing outputs (still excluded) ─────────
 **/output/
 **/results/
-*.eml
+# NOTE: Timesheet/ and TimeSheet-May/ source data are intentionally INCLUDED
+# in this repo per the owner's decision (they contain employee PII + invoices).
 
 # ───────── python ─────────
 __pycache__/
