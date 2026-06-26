@@ -1,0 +1,36 @@
+# ---- Timesheet Intelligence Core Engine ----
+# Core data / validation
+pydantic>=2.10
+pydantic-settings>=2.6
+python-dateutil>=2.9
+PyYAML>=6.0
+
+# Spreadsheet / tabular
+openpyxl>=3.1
+pandas>=2.2
+xlrd>=2.0          # legacy .xls fallback (optional)
+
+# PDF text + tables
+pdfplumber>=0.11
+PyMuPDF>=1.24      # imported as `fitz` -- text, tables, rasterization
+
+# DOCX
+python-docx>=1.1
+
+# Images / OCR preprocessing
+Pillow>=10.0
+# OCR is performed through the local `tesseract` binary (subprocess) and/or
+# an OpenRouter vision model. No python OCR binding is required.
+
+# LLM access (OpenRouter is OpenAI-compatible)
+httpx>=0.27
+requests>=2.32
+
+# API + UI serving
+fastapi>=0.115
+uvicorn>=0.30
+jinja2>=3.1
+python-multipart>=0.0.18
+
+# Tests
+pytest>=8.0

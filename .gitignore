@@ -1,0 +1,36 @@
+# ───────── secrets — NEVER commit ─────────
+**/.env
+**/.env.local
+**/.env.*.local
+*.key
+*.pem
+*.p12
+
+# ───────── real employee data (PII) — NEVER publish ─────────
+/Timesheet/
+/TimeSheet-May/
+**/output/
+**/results/
+*.eml
+
+# ───────── python ─────────
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# ───────── node / next.js ─────────
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# ───────── os / editor / local tooling ─────────
+.DS_Store
+*.log
+.claude/
+.vscode/
+.idea/
