@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # ---- behaviour ----
     llm_policy: str = "on_low_confidence"   # never | on_low_confidence | always
     llm_confidence_threshold: float = 0.6
+    # selective second opinion: re-run only HARD files (low-confidence / flagged /
+    # implausible vision reads) on this stronger model, keeping the better result.
+    # "" disables it; most files stay on the cheap primary model.
+    escalation_model: str = "google/gemini-2.5-pro"
+    escalation_min_confidence: float = 0.6
     use_local_ocr: bool = True
     # OCR engine for scanned/image timesheets: "auto" prefers PaddleOCR when it's
     # installed (far better on faint/light-text grids: ~98 vs ~75 confidence),

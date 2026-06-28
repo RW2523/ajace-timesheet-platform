@@ -189,6 +189,16 @@ class TimesheetPipeline:
                 improved = self._escalate(raw, month, year, client_hint, res)
                 if improved is not None:
                     results[i] = improved
+
+        # selective SECOND OPINION: re-run only HARD results on the stronger
+        # escalation model (gemini), keeping its plausible read. Most files never
+        # reach here, so the cheap primary model carries the bulk of the work.
+        if self.s.escalation_model and self.llm_norm.enabled:
+            for i, res in enumerate(results):
+                if self._needs_second_opinion(res):
+                    better = self._second_opinion(raw, month, year, client_hint, res)
+                    if better is not None:
+                        results[i] = better
         return results
 
     def _should_escalate(self, res: NormResult) -> bool:
@@ -224,6 +234,54 @@ class TimesheetPipeline:
         if llm_data > cur_data or (cur_data == 0 and llm_data > 0):
             llm_res.notes.append(f"escalated from deterministic ({current.method})")
             return llm_res
+        return current
+
+    @staticmethod
+    def _worked_total(res: NormResult) -> tuple[int, float]:
+        worked = sum(1 for e in res.entries if (e.total or 0) > 0)
+        total = sum((e.total or 0) for e in res.entries)
+        return worked, round(total, 2)
+
+    def _needs_second_opinion(self, res: NormResult) -> bool:
+        """Is this result uncertain enough to spend the stronger model on?"""
+        if res.needs_llm or res.confidence < self.s.escalation_min_confidence:
+            return True
+        # implausible LLM read -> likely a mis-count (over/under-read). More worked
+        # days than a month has weekdays, or a wildly high/low monthly total.
+        if "llm" in (res.method or ""):
+            worked, total = self._worked_total(res)
+            if worked > 23 or total > 240 or (res.entries and total < 40):
+                return True
+        return False
+
+    def _second_opinion(self, raw, month, year, client_hint, current: NormResult
+                        ) -> Optional[NormResult]:
+        """Re-run extraction on the stronger escalation model (gemini). It's the
+        more trusted reader on hard files, so keep its result whenever it produces
+        a PLAUSIBLE read -- this corrects both over- and under-reads from the cheap
+        primary model, not just sparse ones."""
+        model = self.s.escalation_model
+        keys = [f"TSE_MODEL_{t.upper()}" for t in
+                ("classify", "vision", "table", "normalize", "validate")]
+        old = {k: os.environ.get(k) for k in keys}
+        for k in keys:
+            os.environ[k] = model
+        try:
+            alt = self.llm_norm.normalize(raw, month, year, client_hint)
+        except Exception as exc:
+            log.warning("second-opinion (%s) failed for %s: %s", model, raw.file, exc)
+            return None
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        if alt is None:
+            return None
+        worked, total = self._worked_total(alt)
+        plausible = (worked > 0 or alt.weekly_totals or alt.stated_total) \
+            and worked <= 24 and total <= 300
+        if plausible:
+            alt.notes.append(f"second opinion via {model} (replaced {current.method})")
+            return alt
         return current
 
 
