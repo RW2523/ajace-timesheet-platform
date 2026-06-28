@@ -16,6 +16,10 @@ export default function DashboardClient({ profile }) {
   const uid = profile.id;
   const fileInput = useRef(null);
 
+  // AI document processing needs the separately-hosted Python engine. When it's
+  // not configured (e.g. on Vercel), the app degrades to manual entry only.
+  const AI_ENABLED = process.env.NEXT_PUBLIC_AI_ENABLED === "true";
+
   const [period, setPeriod] = useState(defaultPeriod());
   const { month, year } = period;
   const holidays = useMemo(() => holidaysInMonth(year, month), [year, month]);
@@ -59,6 +63,7 @@ export default function DashboardClient({ profile }) {
   async function onPickFile(f) {
     if (!f) return;
     setFile(f);
+    if (!AI_ENABLED) return;          // no engine -> skip the rendered preview
     setShowPreview(true);
     setPreviewLoading(true);
     setPreviewPages([]);
@@ -142,8 +147,20 @@ export default function DashboardClient({ profile }) {
     }
   }
 
-  function startManual() {
-    setCalendar(buildCalendar(null, month, year));
+  async function startManual() {
+    const emptyCal = buildCalendar(null, month, year);
+    // when AI is off but a file was attached, still keep it in storage + record it
+    if (file && !AI_ENABLED) {
+      try {
+        const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
+        const storagePath = `${uid}/${year}-${String(month).padStart(2, "0")}/${Date.now()}.${ext}`;
+        await supabase.storage.from("ts-uploads").upload(storagePath, file, {
+          contentType: file.type || "application/octet-stream", upsert: true,
+        });
+        await saveBaseline({ cal: emptyCal, emp: null, storagePath, file, aiStatus: "failed", confidence: null });
+      } catch { /* non-fatal: proceed to manual entry regardless */ }
+    }
+    setCalendar(emptyCal);
     setQ({ regularHours: "", overtimeHours: "", workedWeekends: "" });
     setHolidayWork({});
     setAiMeta(null);
@@ -262,6 +279,7 @@ export default function DashboardClient({ profile }) {
             onPickFile={onPickFile} processing={processing} processAI={processAI}
             startManual={startManual} processError={processError}
             previewPages={previewPages} previewLoading={previewLoading}
+            aiEnabled={AI_ENABLED}
           />
         )}
 
@@ -296,52 +314,64 @@ export default function DashboardClient({ profile }) {
 }
 
 // ---------------- upload step ----------------
-function UploadStep({ file, drag, setDrag, fileInput, onPickFile, processing, processAI, startManual, processError, previewPages, previewLoading }) {
-  return (
-    <div className="split">
-      <div className="stack">
-        <div className="card card-pad">
-          <h3 className="card-title">1 · Upload your timesheet</h3>
-          <div
-            className={"dropzone" + (drag ? " drag" : "")}
-            onClick={() => fileInput.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-            onDragLeave={() => setDrag(false)}
-            onDrop={(e) => { e.preventDefault(); setDrag(false); onPickFile(e.dataTransfer.files?.[0]); }}
-          >
-            <input ref={fileInput} type="file" hidden
-              accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.docx,.doc"
-              onChange={(e) => onPickFile(e.target.files?.[0])} />
-            <div style={{ fontSize: 30 }}>📄</div>
-            <div style={{ fontWeight: 600, marginTop: 6 }}>
-              {file ? file.name : "Drop a file or click to browse"}
-            </div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-              PDF, scanned PDF, Excel, CSV, Word, or an image
-            </div>
-          </div>
-
-          {processError && <div className="alert error" style={{ marginTop: 14 }}>{processError}</div>}
-
-          <div className="row" style={{ marginTop: 16, gap: 10 }}>
-            <button className="btn btn-primary" disabled={!file || processing} onClick={processAI}>
-              {processing ? <><span className="spinner" /> Processing with AI…</> : "✨ Process with AI"}
-            </button>
-            <button className="btn btn-ghost" onClick={startManual} disabled={processing}>
-              Enter manually instead
-            </button>
-          </div>
-          <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-            The AI reads your document and fills the calendar + details. You can fix anything it misses on the next screen.
-          </p>
+function UploadStep({ file, drag, setDrag, fileInput, onPickFile, processing, processAI, startManual, processError, previewPages, previewLoading, aiEnabled }) {
+  const card = (
+    <div className="card card-pad">
+      <h3 className="card-title">{aiEnabled ? "1 · Upload your timesheet" : "Your timesheet"}</h3>
+      {!aiEnabled && (
+        <div className="alert info" style={{ marginBottom: 14 }}>
+          AI auto-fill isn’t enabled in this deployment. Attach your file (optional, stored for your manager) and enter your hours on the next screen.
+        </div>
+      )}
+      <div
+        className={"dropzone" + (drag ? " drag" : "")}
+        onClick={() => fileInput.current?.click()}
+        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={(e) => { e.preventDefault(); setDrag(false); onPickFile(e.dataTransfer.files?.[0]); }}
+      >
+        <input ref={fileInput} type="file" hidden
+          accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv,.docx,.doc"
+          onChange={(e) => onPickFile(e.target.files?.[0])} />
+        <div style={{ fontSize: 30 }}>📄</div>
+        <div style={{ fontWeight: 600, marginTop: 6 }}>
+          {file ? file.name : aiEnabled ? "Drop a file or click to browse" : "Attach your timesheet (optional)"}
+        </div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          PDF, scanned PDF, Excel, CSV, Word, or an image
         </div>
       </div>
 
-      {file && (
-        <PreviewPane pages={previewPages} loading={previewLoading} fileName={file.name} />
+      {processError && <div className="alert error" style={{ marginTop: 14 }}>{processError}</div>}
+
+      <div className="row" style={{ marginTop: 16, gap: 10 }}>
+        {aiEnabled && (
+          <button className="btn btn-primary" disabled={!file || processing} onClick={processAI}>
+            {processing ? <><span className="spinner" /> Processing with AI…</> : "✨ Process with AI"}
+          </button>
+        )}
+        <button className={"btn " + (aiEnabled ? "btn-ghost" : "btn-primary")} onClick={startManual} disabled={processing}>
+          {aiEnabled ? "Enter manually instead" : "Continue to enter hours →"}
+        </button>
+      </div>
+      {aiEnabled && (
+        <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+          The AI reads your document and fills the calendar + details. You can fix anything it misses on the next screen.
+        </p>
       )}
     </div>
   );
+
+  // with AI, show the live source preview beside the uploader; without, single column
+  if (aiEnabled && file) {
+    return (
+      <div className="split">
+        <div className="stack">{card}</div>
+        <PreviewPane pages={previewPages} loading={previewLoading} fileName={file.name} />
+      </div>
+    );
+  }
+  return <div className="stack" style={{ maxWidth: 640 }}>{card}</div>;
 }
 
 // ---------------- review step ----------------
