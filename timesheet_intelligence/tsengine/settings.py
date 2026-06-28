@@ -34,6 +34,11 @@ class Settings(BaseSettings):
         protected_namespaces=(),
     )
 
+    # ---- access control ----
+    # When set, every /api/* call (except /api/health) must send a matching
+    # X-API-Key header. Lets the engine be exposed over a public tunnel safely.
+    api_key: str = ""
+
     # ---- OpenRouter ----
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"

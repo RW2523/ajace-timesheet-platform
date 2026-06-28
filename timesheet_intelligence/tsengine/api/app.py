@@ -16,7 +16,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +33,20 @@ app = FastAPI(title="Timesheet Intelligence", version="1.0.0")
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _require_api_key(request: Request, call_next):
+    """When TSE_API_KEY is configured, every /api/* call (except health) must
+    carry a matching X-API-Key header. This makes it safe to expose the engine
+    over a public tunnel — only the app holding the secret can reach it."""
+    required = get_settings().api_key
+    if required:
+        path = request.url.path
+        if path.startswith("/api/") and path != "/api/health":
+            if request.headers.get("x-api-key") != required:
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+    return await call_next(request)
 
 # in-memory handle to the last run (also persisted to output/latest_report.json)
 STATE: dict = {"report": None, "folder": None}

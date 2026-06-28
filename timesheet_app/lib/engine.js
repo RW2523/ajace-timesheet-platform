@@ -6,6 +6,12 @@ import { enumerateMonth } from "@/lib/month";
 import { holidaysInMonth } from "@/lib/holidays";
 
 const ENGINE_URL = process.env.ENGINE_URL || "http://127.0.0.1:8078";
+const ENGINE_API_KEY = process.env.ENGINE_API_KEY || "";
+
+// X-API-Key header sent to the engine (required when it's behind a public tunnel)
+function engineHeaders() {
+  return ENGINE_API_KEY ? { "X-API-Key": ENGINE_API_KEY } : {};
+}
 
 export async function processUpload(fileBlob, fileName, month, year) {
   const form = new FormData();
@@ -16,6 +22,7 @@ export async function processUpload(fileBlob, fileName, month, year) {
   const res = await fetch(`${ENGINE_URL}/api/process-upload`, {
     method: "POST",
     body: form,
+    headers: engineHeaders(),
     // the LLM pipeline can take a while on scanned docs
     signal: AbortSignal.timeout(240000),
   });
@@ -32,6 +39,7 @@ export async function previewUpload(fileBlob, fileName) {
   const res = await fetch(`${ENGINE_URL}/api/preview-upload`, {
     method: "POST",
     body: form,
+    headers: engineHeaders(),
     signal: AbortSignal.timeout(120000),
   });
   if (!res.ok) {
