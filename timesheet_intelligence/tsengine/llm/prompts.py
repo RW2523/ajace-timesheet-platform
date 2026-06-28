@@ -127,7 +127,13 @@ def vision_normalize_prompt(month: int, year: int) -> str:
             "cell(s). Do not return only a weekly/period subtotal. "
             + _month_context(month, year) + CANONICAL_CONTRACT +
             "\nRead carefully; if a cell is unreadable use null and add a note. "
-            "Ignore any selected-day 'Total' side panel -- it is not the month total.")
+            "Ignore any selected-day 'Total' side panel -- it is not the month total."
+            "\nCRITICAL: Saturday and Sunday are NOT working days. If a weekend "
+            "cell is blank, empty, or 0, output 0 (or null) for it -- NEVER a "
+            "guessed value like 8. Only report weekend hours when the source shows "
+            "an explicit number written for that exact date."
+            "\nIf the document shows an explicit month/period total (e.g. 'Total "
+            "Hours: 176', 'Approved: 168'), also set \"stated_total\" to that number.")
 
 
 def reconcile_messages(employee: str, conflict_blob: str, month: int, year: int) -> list[dict[str, Any]]:

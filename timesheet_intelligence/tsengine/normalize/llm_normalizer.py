@@ -182,10 +182,12 @@ class LLMNormalizer:
         This neutralises run-to-run model variance on hard multi-week scans."""
         res = self._vision_per_page(raw, month, year, client_hint)
         npages = len(raw.images)
-        if not self._has_data(res) or npages < 3:
+        if not self._has_data(res):
             return res
         worked = sum(1 for e in res.entries if (e.total or 0) > 0)
         expected = min(npages * 5, 22)          # ~5 workdays per weekly page, capped
+        if npages == 1:
+            expected = max(8, expected)         # a single page is often a full month, not one week
         if worked >= 0.6 * expected:
             return res                          # coverage looks complete
         cover = lambda r: sum((e.total or 0) for e in r.entries) if r else 0
@@ -352,6 +354,12 @@ class LLMNormalizer:
         for e in res.entries:
             e.regular, e.overtime, e.total = H.split_regular_overtime(
                 e.total, e.regular, e.overtime)
+        # fail loud: a response carrying no usable entries/weekly/total must not
+        # pass as a confident result (it would otherwise stick at conf 0.65).
+        if not res.entries and not res.weekly_totals and res.stated_total is None:
+            res.needs_llm = True
+            res.confidence = min(res.confidence, 0.3)
+            res.notes.append("LLM response had no usable entries/totals")
         return res
 
 

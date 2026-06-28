@@ -122,15 +122,28 @@ class EmployeeRegistry:
         if stated is not None and not has_any_data:
             em.monthly_regular = round(float(stated), 2)
             em.monthly_total = round(float(stated), 2)
+            # no daily grid -> estimate days worked from the total (8h/day) so the
+            # record doesn't misleadingly read "0 days" against a real month total.
+            em.days_worked = round(float(stated) / 8.0)
             em.issues.append(Issue(
                 code=IssueCode.WEEK_ONLY, severity=IssueSeverity.INFO,
                 message=(f"only a stated month total ({stated}h) was available; "
-                         "no daily breakdown in the source")))
+                         "no daily breakdown — days worked inferred from total")))
         elif stated is not None and abs(stated - em.monthly_total) > 0.5:
             em.issues.append(Issue(
                 code=IssueCode.TOTAL_MISMATCH, severity=IssueSeverity.WARNING,
                 message=(f"source states monthly total {stated} but computed "
                          f"{em.monthly_total} from daily/weekly data")))
+
+        # under-read guard: a vision/scan source yielding very little is more
+        # likely a partial read than a genuine part-time month -> flag for review.
+        used_vision = any(("vision" in (r.method or "") or "llm" in (r.method or ""))
+                          for r in results)
+        if used_vision and em.monthly_total < 80 and em.days_worked < 10:
+            em.issues.append(Issue(
+                code=IssueCode.NEEDS_LLM, severity=IssueSeverity.WARNING,
+                message=(f"only {em.monthly_total}h / {em.days_worked} day(s) read from a "
+                         "scanned/vision source -- likely under-read, please verify")))
 
         em.days = days
         em.confidence = round(
@@ -337,10 +350,16 @@ def _disambiguator(cluster: list[NormResult]) -> Optional[str]:
     """A short hint (from the source filename's trailing words) to tell split
     same-named records apart, e.g. 'Jane Doe' from '... Jane Doe.pdf'."""
     import os
+    from ..ingest.excel import _COMPANY_STOPWORDS, _NAME_STOPWORDS
     stem = os.path.splitext(os.path.basename(cluster[0].file))[0]
     s = re.sub(r"[_\-]+", " ", stem)
     s = re.sub(r"\b20\d{2}\b|\d{1,2}[/.]\d{1,2}([/.]\d{2,4})?|\d{5,}", " ", s)
     s = re.sub(r"(?i)\b(timesheets?|time\s*sheet|ts|april|apr|bi\s*monthly|"
                r"jan|feb|mar|may|jun|jul|aug|sep|oct|nov|dec)\b", " ", s)
-    words = [w for w in s.split() if len(w) > 1]
-    return " ".join(words[-3:]).strip() or stem[:16]
+    # keep only plausible name tokens: not company names, not all-caps labels,
+    # not generic stopwords (avoids 'AJACE — AJACE' / '— 15' style corruption).
+    words = [w for w in s.split()
+             if len(w) > 2 and not w.isupper()
+             and w.lower() not in _COMPANY_STOPWORDS
+             and w.lower() not in _NAME_STOPWORDS]
+    return " ".join(words[-3:]).strip() or None

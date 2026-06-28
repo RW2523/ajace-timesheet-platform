@@ -432,9 +432,12 @@ def _strategy_text_hours_labeled(text: str, file: str, order: str, month: int,
     for d, vals in sorted(per_date.items()):
         distinct = sorted({round(v, 2) for v in vals})
         if len(distinct) == 1:
-            # repeated identical readings (detail + summary views) -> one value
+            # repeated identical readings (detail + summary views) -> one value.
+            # Derive the regular/overtime split AT THE SOURCE -- if left None the
+            # registry rollup drops them and monthly_regular wrongly reads 0.
+            r, o, t = H.split_regular_overtime(distinct[0], None, None)
             res.entries.append(DayEntry(
-                date=d, total=distinct[0],
+                date=d, regular=r, overtime=o, total=t,
                 source=SourceRef(file=file, extractor="text_hours_labeled"),
                 raw=raws.get(d)))
         else:

@@ -174,6 +174,14 @@ _NAME_STOPWORDS = set(_MONTH_RE and [
     "time", "sheet", "ts", "month", "approved", "signed", "final", "copy",
 ])
 
+# Employer / agency names that prefix some filenames (e.g. 'Ajace_Time Sheet_
+# Justin_Thason') and must never be taken as the employee.
+_COMPANY_STOPWORDS = {
+    "ajace", "hcpss", "hexaware", "innososft", "innosoft", "npo", "hex",
+}
+# Leading tokens stripped so 'Company TimeSheet Name' yields the PERSON.
+_LEAD_STRIP = ("time sheet ", "timesheet ", "timesheets ", "ts ")
+
 
 def _name_hint(stem: str) -> str:
     """Best-effort employee name from a filename like 'Richard TS-April 2026'.
@@ -185,6 +193,17 @@ def _name_hint(stem: str) -> str:
     # underscores are filename separators -> normalize FIRST so month/marker
     # stripping sees real word boundaries (e.g. 'May_timesheet' not 'May_').
     s = stem.replace("_", " ")
+    # Strip leading company names + timesheet markers so 'Company TimeSheet Name'
+    # filenames yield the PERSON, not the company (e.g. 'Ajace Time Sheet Justin
+    # Thason May-2026' -> 'Justin Thason', not 'Ajace').
+    while True:
+        sl = s.lstrip(" -·,")
+        low2 = sl.lower()
+        hit = next((p for p in _LEAD_STRIP if low2.startswith(p)), None) \
+            or next((c + " " for c in _COMPANY_STOPWORDS if low2.startswith(c + " ")), None)
+        if not hit:
+            break
+        s = sl[len(hit):]
     low = s.lower()
     cut = len(s)
     for mk in (" ts ", " ts-", "-ts ", " ts", "-ts",
@@ -199,8 +218,8 @@ def _name_hint(stem: str) -> str:
     s = re.sub(_MONTH_RE + r".*$", "", s, flags=re.IGNORECASE)
     s = re.sub(r"\b20\d{2}\b", "", s)
     s = s.strip(" -·,")
-    # never surface a bare month/generic word as the employee name; fall back to
-    # the (unique) filename stem so records stay traceable and don't merge.
-    if not s or s.lower() in _NAME_STOPWORDS:
+    # never surface a bare month/company/generic word as a person's name; fall
+    # back to the (unique) filename stem so records stay traceable and don't merge.
+    if not s or s.lower() in _NAME_STOPWORDS or s.lower() in _COMPANY_STOPWORDS:
         return stem.replace("_", " ").strip(" -·,") or stem
     return s
