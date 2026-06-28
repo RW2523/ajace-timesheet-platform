@@ -1,8 +1,9 @@
 # ============================================================================
 # Model routing table.
 #
-# Configured for MAXIMUM ACCURACY: google/gemini-2.5-pro on every task, with
-# openai/gpt-4o-mini as a cheap, fast fallback if gemini errors/times out.
+# COST-SAVING MODE: openai/gpt-4o-mini is the ONLY model on every task (no
+# gemini). gpt-4o-mini is dramatically cheaper; accuracy on dense/handwritten
+# tables is lower than gemini-2.5-pro, but cost is the priority here.
 # Swap any task by editing the candidate list or setting TSE_MODEL_<TASK>.
 # Nothing is hardcoded in code -- the engine asks for a *task*, never a model.
 # ============================================================================
@@ -15,34 +16,25 @@ defaults:
 tasks:
   classify:
     candidates:
-      - google/gemini-2.5-pro
       - openai/gpt-4o-mini
     max_tokens: 2048
 
   vision:
     candidates:
-      - google/gemini-2.5-pro
       - openai/gpt-4o-mini
-    # headroom for gemini reasoning + a full month of entries + the OCR grounding
-    # text in the prompt; the hard per-call timeout bounds the worst case.
     max_tokens: 12000
 
   table:
     candidates:
-      - google/gemini-2.5-pro
       - openai/gpt-4o-mini
     max_tokens: 12000
 
   normalize:
     candidates:
-      - google/gemini-2.5-pro
       - openai/gpt-4o-mini
-    # headroom for gemini's reasoning + a full month of entries (project matrices
-    # produce large output); the hard per-call timeout bounds the worst case.
     max_tokens: 12000
 
   validate:
     candidates:
-      - google/gemini-2.5-pro
       - openai/gpt-4o-mini
     max_tokens: 4096
