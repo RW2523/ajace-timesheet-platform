@@ -61,7 +61,13 @@ class EmployeeRegistry:
                 if len(clusters) > 1:
                     hint = _disambiguator(cluster)
                     if hint:
-                        em.employee_name = f"{em.employee_name or 'Unknown'} — {hint}"
+                        base = em.employee_name or "Unknown"
+                        # drop hint tokens already in the base name so we get
+                        # 'Justin-Thason — Akkodis', not '... — Justin Thason Akkodis'.
+                        seen = {t.lower().strip(".,-") for t in re.split(r"[\s\-]+", base)}
+                        extra = " ".join(w for w in hint.split()
+                                         if w.lower().strip(".,-") not in seen)
+                        em.employee_name = f"{base} — {extra}" if extra else base
                     em.issues.append(Issue(
                         code=IssueCode.CONFLICT, severity=IssueSeverity.WARNING,
                         message="multiple distinct people shared a name/template; "
@@ -262,12 +268,17 @@ class EmployeeRegistry:
             if not uncovered:
                 continue   # this week's days are already counted -> skip (no double count)
             frac = len(uncovered) / max(span, 1)
-            if w.total_hours is not None:
-                tot += w.total_hours * frac
+            wt = w.total_hours
+            if wt is not None:
+                tot += wt * frac
             if w.regular_hours is not None:
                 reg += w.regular_hours * frac
+            elif wt is not None:               # weekly total not split -> treat as regular
+                reg += wt * frac
             if w.overtime_hours is not None:
                 ot += w.overtime_hours * frac
+            if wt is not None:                 # estimate worked days for weekly-only sources
+                worked += round(wt * frac / 8.0)
             covered.update(uncovered)
             used_weekly += 1
         if weekly:
