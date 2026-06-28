@@ -33,3 +33,6 @@ out/
 .claude/
 .vscode/
 .idea/
+
+# generated evaluation reports (contain employee PII; regenerated per run)
+/reports/
