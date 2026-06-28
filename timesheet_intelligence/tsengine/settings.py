@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     llm_policy: str = "on_low_confidence"   # never | on_low_confidence | always
     llm_confidence_threshold: float = 0.6
     use_local_ocr: bool = True
+    # OCR engine for scanned/image timesheets: "auto" prefers PaddleOCR when it's
+    # installed (far better on faint/light-text grids: ~98 vs ~75 confidence),
+    # falling back to tesseract; "tesseract" or "paddle" force one.
+    ocr_engine: str = "auto"
     # IBM Docling (TableFormer TSR) as a fallback PDF table extractor, used only
     # when pdfplumber finds NO tables. OPT-IN (default off): A/B testing showed it
     # extracts materially better grids, but enabling it by default can short-circuit
