@@ -160,7 +160,7 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
 
   return (
     <div className="modal-bg" onClick={onClose}>
-      <div className="modal wide" onClick={(e) => e.stopPropagation()}>
+      <div className={"modal " + (preview && sourceFile ? "modal-split" : "wide")} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
             <h3 style={{ fontSize: 16 }}>{profile.full_name || edit.fields?.employee_name} · {periodLabel(edit.month, edit.year)}</h3>
@@ -168,13 +168,14 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
           </div>
           <div className="row" style={{ gap: 8 }}>
             {sourceFile && (
-              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(true)} title="Verify against the original document">
-                📄 Preview document
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview((p) => !p)} title="Verify against the original document">
+                {preview ? "Hide document" : "📄 Preview document"}
               </button>
             )}
             <button className="x" onClick={onClose}>×</button>
           </div>
         </div>
+        <div className="modal-cols">
         <div className="modal-body">
           <div className="tiles" style={{ marginBottom: 16 }}>
             <div className="tile reg"><div className="v">{r.regular}</div><div className="l">Regular</div></div>
@@ -217,25 +218,25 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
             </div>
           </div>
         </div>
+        {preview && sourceFile && (
+          <DocPreviewPanel supabase={supabase} path={sourceFile.storage_path}
+            fileName={sourceFile.file_name} onClose={() => setPreview(false)} />
+        )}
+        </div>
       </div>
 
       {dayIdx != null && (
         <DayModal day={days[dayIdx]} onClose={() => setDayIdx(null)}
           onSave={(upd) => { const n = days.slice(); n[dayIdx] = upd; setDays(n); setDayIdx(null); }} />
       )}
-
-      {preview && sourceFile && (
-        <DocPreview supabase={supabase} path={sourceFile.storage_path}
-          fileName={sourceFile.file_name} onClose={() => setPreview(false)} />
-      )}
     </div>
   );
 }
 
-// Big-screen source-document preview: renders the stored file to scrollable page
-// images (via the admin-preview route -> engine) so admins can verify a
-// submission against the original. Zoom + open-in-new-tab supported.
-function DocPreview({ supabase, path, fileName, onClose }) {
+// Inline source-document preview PANEL: renders the stored file to scrollable
+// page images (via the admin-preview route -> engine) and sits on the RIGHT of
+// the submission detail so an admin can verify against the original side-by-side.
+function DocPreviewPanel({ supabase, path, fileName, onClose }) {
   const [pages, setPages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -268,22 +269,21 @@ function DocPreview({ supabase, path, fileName, onClose }) {
   }
 
   return (
-    <div className="modal-bg" style={{ zIndex: 70 }} onClick={onClose}>
-      <div className="docpreview" onClick={(e) => e.stopPropagation()}>
-        <div className="pv-bar">
-          <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            📄 {fileName || "Source document"}
-          </span>
-          <div className="row" style={{ gap: 4 }}>
-            <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 0.8))} title="Zoom out">−</button>
-            <span className="muted" style={{ fontSize: 11, minWidth: 38, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 1.25))} title="Zoom in">+</button>
-            <button className="btn btn-ghost btn-sm" onClick={() => setZoom(1)} title="Fit">⤢</button>
-            <button className="btn btn-ghost btn-sm" onClick={openOriginal} title="Open original in a new tab">open ↗</button>
-            <button className="btn btn-ghost btn-sm" onClick={onClose}>×</button>
-          </div>
+    <div className="docpreview-panel">
+      <div className="pv-bar">
+        <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          📄 {fileName || "Source document"}
+        </span>
+        <div className="row" style={{ gap: 4 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 0.8))} title="Zoom out">−</button>
+          <span className="muted" style={{ fontSize: 11, minWidth: 38, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 1.25))} title="Zoom in">+</button>
+          <button className="btn btn-ghost btn-sm" onClick={() => setZoom(1)} title="Fit">⤢</button>
+          <button className="btn btn-ghost btn-sm" onClick={openOriginal} title="Open original in a new tab">open ↗</button>
+          <button className="btn btn-ghost btn-sm" onClick={onClose} title="Hide document">×</button>
         </div>
-        <div className="pv-body" style={{ "--z": zoom }}>
+      </div>
+      <div className="pv-body" style={{ "--z": zoom }}>
           {loading && (
             <div style={{ color: "#e2e8f0", textAlign: "center", padding: 40, fontSize: 13 }}>
               <span className="spinner" style={{ marginRight: 8 }} /> Rendering document…
@@ -298,7 +298,6 @@ function DocPreview({ supabase, path, fileName, onClose }) {
           {!loading && !err && pages.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
         </div>
       </div>
-    </div>
   );
 }
 
