@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Topbar from "@/components/Topbar";
 import Calendar from "@/components/Calendar";
@@ -126,6 +126,8 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
       {detail && (
         <SubmissionDetail
           edit={detail} profile={pmap[detail.user_id] || {}} adminProfile={profile}
+          sourceFile={files.find((f) => f.user_id === detail.user_id
+            && f.month === detail.month && f.year === detail.year)}
           supabase={supabase} onClose={() => setDetail(null)}
           onSaved={() => { setDetail(null); router.refresh(); }}
         />
@@ -134,12 +136,13 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
   );
 }
 
-function SubmissionDetail({ edit, profile, adminProfile, supabase, onClose, onSaved }) {
+function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, onClose, onSaved }) {
   const [days, setDays] = useState(edit.days || []);
   const [dayIdx, setDayIdx] = useState(null);
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [preview, setPreview] = useState(false);
   const r = rollup(days);
   const q = edit.questionnaire || {};
 
@@ -163,7 +166,14 @@ function SubmissionDetail({ edit, profile, adminProfile, supabase, onClose, onSa
             <h3 style={{ fontSize: 16 }}>{profile.full_name || edit.fields?.employee_name} · {periodLabel(edit.month, edit.year)}</h3>
             <div className="muted" style={{ fontSize: 12 }}>{profile.email} · {edit.fields?.client || profile.client || "—"}</div>
           </div>
-          <button className="x" onClick={onClose}>×</button>
+          <div className="row" style={{ gap: 8 }}>
+            {sourceFile && (
+              <button className="btn btn-ghost btn-sm" onClick={() => setPreview(true)} title="Verify against the original document">
+                📄 Preview document
+              </button>
+            )}
+            <button className="x" onClick={onClose}>×</button>
+          </div>
         </div>
         <div className="modal-body">
           <div className="tiles" style={{ marginBottom: 16 }}>
@@ -213,6 +223,81 @@ function SubmissionDetail({ edit, profile, adminProfile, supabase, onClose, onSa
         <DayModal day={days[dayIdx]} onClose={() => setDayIdx(null)}
           onSave={(upd) => { const n = days.slice(); n[dayIdx] = upd; setDays(n); setDayIdx(null); }} />
       )}
+
+      {preview && sourceFile && (
+        <DocPreview supabase={supabase} path={sourceFile.storage_path}
+          fileName={sourceFile.file_name} onClose={() => setPreview(false)} />
+      )}
+    </div>
+  );
+}
+
+// Big-screen source-document preview: renders the stored file to scrollable page
+// images (via the admin-preview route -> engine) so admins can verify a
+// submission against the original. Zoom + open-in-new-tab supported.
+function DocPreview({ supabase, path, fileName, onClose }) {
+  const [pages, setPages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [zoom, setZoom] = useState(1);
+  const clamp = (z) => Math.min(4, Math.max(0.4, z));
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/admin-preview", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path }),
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.error || "preview failed");
+        if (active) setPages(d.pages || []);
+      } catch (e) {
+        if (active) setErr(String(e.message || e));
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [path]);
+
+  async function openOriginal() {
+    const { data } = await supabase.storage.from("ts-uploads").createSignedUrl(path, 120);
+    if (data?.signedUrl) window.open(data.signedUrl, "_blank");
+  }
+
+  return (
+    <div className="modal-bg" style={{ zIndex: 70 }} onClick={onClose}>
+      <div className="docpreview" onClick={(e) => e.stopPropagation()}>
+        <div className="pv-bar">
+          <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            📄 {fileName || "Source document"}
+          </span>
+          <div className="row" style={{ gap: 4 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 0.8))} title="Zoom out">−</button>
+            <span className="muted" style={{ fontSize: 11, minWidth: 38, textAlign: "center" }}>{Math.round(zoom * 100)}%</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 1.25))} title="Zoom in">+</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setZoom(1)} title="Fit">⤢</button>
+            <button className="btn btn-ghost btn-sm" onClick={openOriginal} title="Open original in a new tab">open ↗</button>
+            <button className="btn btn-ghost btn-sm" onClick={onClose}>×</button>
+          </div>
+        </div>
+        <div className="pv-body" style={{ "--z": zoom }}>
+          {loading && (
+            <div style={{ color: "#e2e8f0", textAlign: "center", padding: 40, fontSize: 13 }}>
+              <span className="spinner" style={{ marginRight: 8 }} /> Rendering document…
+            </div>
+          )}
+          {err && (
+            <div style={{ color: "#fca5a5", textAlign: "center", padding: 40, fontSize: 13 }}>
+              Couldn’t render preview: {err}<br />
+              <a className="src-link" onClick={openOriginal} role="button" style={{ color: "#93c5fd" }}>Open the original ↗</a>
+            </div>
+          )}
+          {!loading && !err && pages.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
+        </div>
+      </div>
     </div>
   );
 }
