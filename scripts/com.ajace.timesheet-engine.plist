@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ajace.timesheet-engine</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/richardwatsonstephenamudha/miniconda3/bin/python3</string>
+    <string>-m</string>
+    <string>uvicorn</string>
+    <string>tsengine.api.app:app</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>8078</string>
+    <string>--log-level</string>
+    <string>warning</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/richardwatsonstephenamudha/Documents/aj_t/timesheet_intelligence</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/ajace-engine.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/ajace-engine.log</string>
+</dict>
+</plist>
