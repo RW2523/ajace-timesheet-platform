@@ -48,6 +48,23 @@ if [ -n "$URL" ] && [ "$URL" != "$OLD" ]; then
   fi
 fi
 
-# Block on cloudflared; when it dies this script exits and launchd restarts it.
-wait $CF_PID
-echo "$(date '+%F %T') cloudflared exited; launchd will restart" >> "$LOG"
+# Health-monitor the tunnel. A quick tunnel can go DEAD while cloudflared stays
+# alive (e.g. after the Mac sleeps or the network changes), so we actively probe
+# the public URL -- not just whether the process is up. On a dead tunnel we kill
+# cloudflared and exit, so launchd restarts us with a fresh tunnel + Vercel sync.
+fails=0
+while kill -0 "$CF_PID" 2>/dev/null; do
+  sleep 30
+  if curl -sf -o /dev/null --max-time 12 "$URL/api/health"; then
+    fails=0
+  else
+    fails=$((fails + 1))
+    echo "$(date '+%F %T') tunnel probe failed ($fails) for $URL" >> "$LOG"
+    if [ "$fails" -ge 2 ]; then
+      echo "$(date '+%F %T') tunnel dead -> killing cloudflared so launchd restarts" >> "$LOG"
+      kill "$CF_PID" 2>/dev/null
+      break
+    fi
+  fi
+done
+echo "$(date '+%F %T') wrapper ending (launchd will restart)" >> "$LOG"
