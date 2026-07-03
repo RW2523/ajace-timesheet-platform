@@ -27,8 +27,17 @@ export async function POST(request) {
     return NextResponse.json({ error: "file, month, year required" }, { status: 400 });
   }
 
+  // Admin-chosen AI flow ("budget" = free local model first, "premium" =
+  // cloud + gemini second opinion). Defaults to premium if unset/unreadable.
+  let flow = "premium";
   try {
-    const result = await processUpload(file, file.name || "upload", month, year);
+    const { data: fs } = await supabase
+      .from("ts_app_settings").select("value").eq("key", "ai_flow").single();
+    if (fs?.value === "budget" || fs?.value === "premium") flow = fs.value;
+  } catch { /* keep default */ }
+
+  try {
+    const result = await processUpload(file, file.name || "upload", month, year, flow);
     const employee = result.employee;
     const calendar = buildCalendar(employee, month, year);
     return NextResponse.json({
@@ -38,6 +47,7 @@ export async function POST(request) {
       calendar,
       totals: rollup(calendar),
       llm_used: result.llm_used,
+      flow: result.flow || flow,
       file_name: result.file_name,
       raw_employees: result.employees,
     });

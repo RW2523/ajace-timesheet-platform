@@ -8,7 +8,7 @@ import { createClient } from "@/lib/supabase/client";
 import { periodLabel } from "@/lib/month";
 import { rollup } from "@/lib/engine";
 
-export default function AdminClient({ profile, profiles, edits, timesheets, files, adminEdits }) {
+export default function AdminClient({ profile, profiles, edits, timesheets, files, adminEdits, aiFlow = "premium" }) {
   const supabase = createClient();
   const router = useRouter();
   const pmap = useMemo(() => Object.fromEntries(profiles.map((p) => [p.id, p])), [profiles]);
@@ -33,6 +33,8 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
           <div className="tile tot"><div className="v">{Math.round(totalHours)}</div><div className="l">Total hours</div></div>
           <div className="tile"><div className="v" style={{ color: flagged ? "var(--red)" : "var(--green)" }}>{flagged}</div><div className="l">With errors</div></div>
         </div>
+
+        <FlowPicker supabase={supabase} adminId={profile.id} initial={aiFlow} />
 
         <div className="tabs">
           {[["submissions", "Submissions"], ["employees", "Employees"], ["files", "Files"], ["revisions", "Admin revisions"]].map(([k, label]) => (
@@ -298,6 +300,68 @@ function DocPreviewPanel({ supabase, path, fileName, onClose }) {
           {!loading && !err && pages.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
         </div>
       </div>
+  );
+}
+
+// Admin control: which AI flow processes employee uploads.
+function FlowPicker({ supabase, adminId, initial }) {
+  const [flow, setFlow] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState("");
+
+  async function choose(next) {
+    if (next === flow || saving) return;
+    setSaving(true); setSaved("");
+    const { error } = await supabase.from("ts_app_settings").upsert(
+      { key: "ai_flow", value: next, updated_at: new Date().toISOString(), updated_by: adminId },
+      { onConflict: "key" }
+    );
+    setSaving(false);
+    if (error) { setSaved("Failed to save: " + error.message); return; }
+    setFlow(next);
+    setSaved("Saved ✓ — new uploads will use the " + next + " flow.");
+  }
+
+  const opts = [
+    { key: "premium", title: "⭐ Premium", desc: "Highest accuracy — GPT-4o-mini + Gemini second opinion on hard files. Uses paid AI credits." },
+    { key: "budget", title: "💰 Budget", desc: "Near-zero cost — free local AI first (slower), cloud only as fallback. No Gemini." },
+  ];
+
+  return (
+    <div className="card card-pad" style={{ marginBottom: 20 }}>
+      <div className="between" style={{ flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <h3 className="card-title" style={{ marginBottom: 4 }}>AI processing flow</h3>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Applies to every employee upload processed with AI.
+          </div>
+        </div>
+        <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+          {opts.map((o) => (
+            <button key={o.key} onClick={() => choose(o.key)} disabled={saving}
+              title={o.desc}
+              className="btn"
+              style={{
+                flexDirection: "column", alignItems: "flex-start", gap: 2,
+                maxWidth: 320, textAlign: "left",
+                border: flow === o.key ? "2px solid var(--brand)" : "1px solid var(--line-strong)",
+                background: flow === o.key ? "var(--brand-soft)" : "var(--surface)",
+                color: "var(--txt)",
+              }}>
+              <span style={{ fontWeight: 700 }}>
+                {o.title} {flow === o.key && <span className="badge green" style={{ marginLeft: 6 }}>active</span>}
+              </span>
+              <span className="muted" style={{ fontSize: 11, fontWeight: 400, whiteSpace: "normal" }}>{o.desc}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {saved && (
+        <div className={"alert " + (saved.startsWith("Failed") ? "error" : "ok")} style={{ marginTop: 10 }}>
+          {saved}
+        </div>
+      )}
+    </div>
   );
 }
 

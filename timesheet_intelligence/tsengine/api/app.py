@@ -134,22 +134,28 @@ async def api_process_upload(
     file: UploadFile = File(...),
     month: int = Form(...),
     year: int = Form(...),
+    flow: str = Form(""),
 ):
     """Process a SINGLE uploaded timesheet (the product's per-employee flow).
 
     Saves the upload to a scratch folder, runs the full extraction+LLM pipeline
     on just that file, and returns the first employee record it found -- the
     populated calendar + identity fields the web app renders for review/edit.
+    ``flow`` optionally overrides the engine default per request
+    ("budget" = free local LLM first, "premium" = cloud + gemini second opinion).
     """
     if not (1 <= month <= 12):
         raise HTTPException(400, "month must be 1-12")
+    s = get_settings()
+    if flow.strip().lower() in ("budget", "premium"):
+        s = s.model_copy(update={"flow": flow.strip().lower()})
     name = Path(file.filename or "upload").name           # strip any path
     tmp = Path(tempfile.mkdtemp(prefix="ts_upload_"))
     try:
         dest = tmp / name
         with dest.open("wb") as fh:
             shutil.copyfileobj(file.file, fh)
-        report = process_folder(tmp, month, year)
+        report = process_folder(tmp, month, year, settings=s)
         data = json.loads(report.model_dump_json())
         emps = data.get("employees", [])
         return {
@@ -159,6 +165,8 @@ async def api_process_upload(
             "employees": emps,                            # >1 if the file held several
             "unprocessed": data.get("unprocessed", []),
             "llm_used": data.get("llm_used", False),
+            "flow": data.get("flow", s.flow),
+            "agent_trace": (data.get("agent_traces") or [None])[0],
             "stats": report.stats(),
             "file_name": name,
         }

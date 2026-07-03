@@ -13,11 +13,12 @@ function engineHeaders() {
   return ENGINE_API_KEY ? { "X-API-Key": ENGINE_API_KEY } : {};
 }
 
-export async function processUpload(fileBlob, fileName, month, year) {
+export async function processUpload(fileBlob, fileName, month, year, flow) {
   const form = new FormData();
   form.append("file", fileBlob, fileName);
   form.append("month", String(month));
   form.append("year", String(year));
+  if (flow) form.append("flow", flow);   // "budget" | "premium" (admin setting)
 
   const res = await fetch(`${ENGINE_URL}/api/process-upload`, {
     method: "POST",
