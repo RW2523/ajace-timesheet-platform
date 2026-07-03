@@ -176,7 +176,8 @@ def ocr_image(path: str | Path, settings: Optional[Settings] = None,
 
 
 def layout_ocr(path: str | Path, settings: Optional[Settings] = None,
-               preprocess: bool = True) -> tuple[str, float]:
+               preprocess: bool = True,
+               meta_out: Optional[dict] = None) -> tuple[str, float]:
     """Layout-aware OCR dispatcher (the "Layout Finder").
 
     Returns (reconstructed_text, mean_confidence 0..100) where each visual ROW is
@@ -184,13 +185,20 @@ def layout_ocr(path: str | Path, settings: Optional[Settings] = None,
     reads more accurately and stops a vision model from hallucinating values into
     blank cells. Backend is chosen by settings.ocr_engine ("auto" prefers
     PaddleOCR when installed -- much stronger on faint/light-text scans -- and
-    falls back to tesseract).
+    falls back to tesseract). When ``meta_out`` is given, records which engine
+    produced the returned text under meta_out["ocr_engine"] (agent-trace audit).
     """
     s = settings or get_settings()
     engine = getattr(s, "ocr_engine", "auto")
+
+    def _won(name: str):
+        if meta_out is not None:
+            meta_out["ocr_engine"] = name
+
     if engine == "paddle" and paddle_available():
         txt, conf = paddle_layout_ocr(path, s)
         if txt:                                  # forced paddle, succeeded
+            _won("paddleocr")
             return txt, conf
         # forced paddle failed -> fall through to tesseract
     # tesseract first (fast on every scan)
@@ -202,7 +210,9 @@ def layout_ocr(path: str | Path, settings: Optional[Settings] = None,
             and conf < float(getattr(s, "ocr_ground_min_confidence", 55.0))):
         p_txt, p_conf = paddle_layout_ocr(path, s)
         if p_txt and p_conf > conf:
+            _won("paddleocr")
             return p_txt, p_conf
+    _won("tesseract")
     return txt, conf
 
 

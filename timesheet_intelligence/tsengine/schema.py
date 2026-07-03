@@ -23,7 +23,29 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
+
+
+# --------------------------------------------------------------------------- #
+# Internal sub-agent trace (per-file audit of which agent did what)
+# --------------------------------------------------------------------------- #
+class AgentAction(BaseModel):
+    agent: str                      # Classifier|Parser|OCR|Normalizer|
+                                    # Normalizer:Local|Normalizer:Cloud|
+                                    # VisionReader|Validator|Reconciler
+    action: str                     # classified|extracted|ocr|normalized|escalated|
+                                    # accepted|rejected|second_opinion|validated
+    detail: str = ""
+    model: Optional[str] = None     # e.g. "local/qwen2.5:7b-instruct"
+    ok: bool = True
+    duration_ms: Optional[int] = None
+
+
+class FileTrace(BaseModel):
+    file: str
+    flow: str = "premium"
+    handled_by: str = ""            # final agent whose numbers were kept
+    actions: list[AgentAction] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -191,6 +213,10 @@ class ProcessingReport(BaseModel):
     generated_at: str
     employees: list[EmployeeMonth] = Field(default_factory=list)
     unprocessed: list[UnprocessedFile] = Field(default_factory=list)
+
+    # flow + internal sub-agent audit
+    flow: str = "premium"
+    agent_traces: list[FileTrace] = Field(default_factory=list)
 
     # rollups
     files_seen: int = 0

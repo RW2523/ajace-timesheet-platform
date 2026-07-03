@@ -33,7 +33,7 @@ class FakeRouter:
         self._data = data
         self.client = _FakeClient()
 
-    def run(self, task, messages, json_mode=True):
+    def run(self, task, messages, json_mode=True, no_local=False):
         return LLMResult(ok=True, task=task, model="fake/model", data=self._data)
 
 

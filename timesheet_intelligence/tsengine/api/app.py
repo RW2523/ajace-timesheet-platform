@@ -94,8 +94,17 @@ def _load_latest_from_disk() -> Optional[dict]:
 
 @app.get("/api/health")
 def health():
+    from ..llm import local_llm
+
     s = get_settings()
     return {"ok": True, "llm_enabled": s.llm_enabled,
+            "flow": s.flow,
+            "local_llm": {
+                "enabled": s.local_llm_enabled,
+                "model": s.local_llm_model,
+                "available": local_llm.available(s.local_llm_base_url,
+                                                 s.local_llm_model),
+            },
             "models": {t: s.models_for(t)[:1] for t in
                        ("classify", "vision", "table", "normalize", "validate")}}
 

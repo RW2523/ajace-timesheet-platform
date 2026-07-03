@@ -36,7 +36,24 @@ def _find_soffice() -> str | None:
 
 
 def _to_xlsx(p: Path) -> Path:
-    """openpyxl can't read legacy .xls -- convert to .xlsx via LibreOffice."""
+    """openpyxl can't read legacy .xls -- convert to .xlsx.
+
+    Fast path: pandas+xlrd round-trip (~0.02s, no external binary). Fallback:
+    LibreOffice headless (~2.7s) for .xls variants xlrd can't parse.
+    """
+    try:
+        import pandas as pd
+
+        sheets = pd.read_excel(str(p), sheet_name=None, header=None, engine="xlrd")
+        tmp = Path(tempfile.mkdtemp(prefix="ts_xls_"))
+        out = tmp / (p.stem + ".xlsx")
+        with pd.ExcelWriter(str(out), engine="openpyxl") as xw:
+            for name, df in sheets.items():
+                df.to_excel(xw, sheet_name=str(name)[:31], header=False, index=False)
+        if out.exists() and out.stat().st_size > 0:
+            return out
+    except Exception:
+        pass                                    # fall through to LibreOffice
     soffice = _find_soffice()
     if not soffice:
         return p

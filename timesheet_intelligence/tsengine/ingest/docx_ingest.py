@@ -70,7 +70,7 @@ def extract(path: str | Path, settings: Optional[Settings] = None) -> RawExtract
                                  extractor="docx_media"),
             ))
             if have_ocr:
-                txt, conf = layout_ocr(img_path, s)
+                txt, conf = layout_ocr(img_path, s, meta_out=raw.meta)
                 if txt.strip():
                     ocr_parts.append(f"----- embedded image {idx} (OCR) -----\n{txt}")
                     raw.meta["ocr_confidence"] = conf

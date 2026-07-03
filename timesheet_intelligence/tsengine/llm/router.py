@@ -14,9 +14,22 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from ..settings import Settings, get_settings
+from . import local_llm
 from .client import OpenRouterClient, OpenRouterError, _loads_lenient
 
 log = logging.getLogger("tsengine.llm")
+
+# Tasks the FREE local model may handle (text-only; it has no vision).
+LOCAL_TASKS = {"normalize", "table", "classify", "validate"}
+
+
+def _has_image_content(messages: list[dict]) -> bool:
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list) and any(
+                isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+            return True
+    return False
 
 
 @dataclass
@@ -79,6 +92,7 @@ class ModelRouter:
         messages: list[dict[str, Any]],
         *,
         json_mode: bool = True,
+        no_local: bool = False,
     ) -> LLMResult:
         if not self.enabled:
             return LLMResult(ok=False, task=task, error="llm disabled / no api key")
@@ -87,6 +101,28 @@ class ModelRouter:
         temperature = float(params.get("temperature", 0.0))
         max_tokens = int(params.get("max_tokens", 4096))
         json_mode = json_mode and bool(params.get("response_format_json", True))
+
+        # ---- budget flow: FREE local model first (text tasks only) ----
+        if (json_mode and not no_local and task in LOCAL_TASKS
+                and self.s.local_llm_enabled
+                and not _has_image_content(messages)
+                and local_llm.available(self.s.local_llm_base_url,
+                                        self.s.local_llm_model)):
+            model = f"local/{self.s.local_llm_model}"
+            try:
+                with self._lock:
+                    self.calls += 1
+                data, toks = local_llm.chat_json(
+                    self.s.local_llm_model, messages,
+                    base_url=self.s.local_llm_base_url,
+                    temperature=temperature, max_tokens=max_tokens,
+                    timeout=self.s.local_llm_timeout_seconds,
+                    num_ctx=self.s.local_llm_num_ctx)
+                self._record(model, {"total_tokens": toks, "cost": 0.0})
+                return LLMResult(ok=True, task=task, model=model, data=data,
+                                 attempts=[model])
+            except Exception as exc:
+                log.warning("local LLM failed for %s (%s); using cloud", task, exc)
 
         attempts: list[str] = []
         last_err: Optional[str] = None

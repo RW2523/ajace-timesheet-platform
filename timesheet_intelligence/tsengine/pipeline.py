@@ -24,8 +24,8 @@ from .llm.router import ModelRouter
 from .normalize.llm_normalizer import LLMNormalizer
 from .normalize.normalizer import NormResult, Normalizer
 from .orchestrator import Orchestrator
-from .schema import (ENGINE_VERSION, ExtractionQuality, ProcessingReport,
-                     UnprocessedFile)
+from .schema import (ENGINE_VERSION, AgentAction, ExtractionQuality, FileTrace,
+                     ProcessingReport, UnprocessedFile)
 from .settings import Settings, get_settings
 from .validate.validator import Validator
 
@@ -122,6 +122,7 @@ class TimesheetPipeline:
             folder=str(root), month=month, year=year,
             generated_at=dt.datetime.now().isoformat(timespec="seconds"),
             engine_version=ENGINE_VERSION,
+            flow=self.s.flow,
         )
         all_results: list[NormResult] = []
         files = self.discover(root)
@@ -158,19 +159,54 @@ class TimesheetPipeline:
         return report
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _agent_for(method: str) -> str:
+        """Which internal sub-agent a NormResult's method string belongs to."""
+        m = method or ""
+        if "vision" in m:
+            return "VisionReader"
+        if ":local/" in m or "local/" in m:
+            return "Normalizer:Local"
+        if m.startswith("llm"):
+            return "Normalizer:Cloud"
+        return "Normalizer"
+
     def _process_one(self, path: Path, rel: str, month: int, year: int,
                      client_hint: Optional[str], report: ProcessingReport
                      ) -> Optional[list[NormResult]]:
+        trace = FileTrace(file=rel, flow=self.s.flow) if self.s.agent_trace else None
+
+        def act(agent: str, action: str, detail: str = "",
+                model: Optional[str] = None, ok: bool = True) -> None:
+            if trace is not None:
+                trace.actions.append(AgentAction(
+                    agent=agent, action=action, detail=detail[:300],
+                    model=model, ok=ok))
+
+        def done(handled_by: str) -> None:
+            if trace is not None:
+                trace.handled_by = handled_by
+                report.agent_traces.append(trace)
+
         det = self.orch.detect(path)
+        act("Classifier", "classified", f"{det.kind.value} ({det.reason})")
         raw = self.orch.extract(path, det)
         # restore folder-relative file label for nicer audit trails
         raw.file = rel
+        act("Parser", "extracted",
+            f"{len(raw.tables)} table(s), {len(raw.text)} chars, {len(raw.images)} image(s)")
+        if raw.meta.get("ocr_confidence") is not None:
+            act("OCR", "ocr",
+                f"{raw.meta.get('ocr_engine', 'tesseract')} conf "
+                f"{raw.meta.get('ocr_confidence')}")
 
         if raw.quality == ExtractionQuality.EMPTY and not raw.text and not raw.tables \
                 and not raw.images:
             report.unprocessed.append(UnprocessedFile(
                 file=rel, file_type=det.kind.value,
                 reason="; ".join(raw.notes) or "nothing extractable"))
+            act("Parser", "rejected", "nothing extractable", ok=False)
+            done("Parser")
             return None
 
         # Skip invoices / billing docs -- they carry names+hours and would
@@ -179,26 +215,37 @@ class TimesheetPipeline:
             report.unprocessed.append(UnprocessedFile(
                 file=rel, file_type=det.kind.value,
                 reason="appears to be an invoice / billing document, not a timesheet"))
+            act("Classifier", "rejected", "invoice/billing document, not a timesheet")
+            done("Classifier")
             return None
 
         results = self.normalizer.normalize(raw, month, year, client_hint)
+        for res in results:
+            act("Normalizer", "normalized",
+                f"{res.method}, conf {res.confidence:.2f}, {len(res.entries)} entries"
+                + (", needs_llm" if res.needs_llm else ""))
 
         # decide on LLM escalation
         for i, res in enumerate(results):
             if self._should_escalate(res):
-                improved = self._escalate(raw, month, year, client_hint, res)
+                improved = self._escalate(raw, month, year, client_hint, res, act)
                 if improved is not None:
                     results[i] = improved
 
         # selective SECOND OPINION: re-run only HARD results on the stronger
-        # escalation model (gemini), keeping its plausible read. Most files never
-        # reach here, so the cheap primary model carries the bulk of the work.
-        if self.s.escalation_model and self.llm_norm.enabled:
+        # model. Budget flow hard-disables this (second_opinion_model == "").
+        if self.s.second_opinion_model and self.llm_norm.enabled:
             for i, res in enumerate(results):
                 if self._needs_second_opinion(res):
                     better = self._second_opinion(raw, month, year, client_hint, res)
                     if better is not None:
+                        if better is not res:
+                            w, t = self._worked_total(better)
+                            act("Reconciler", "second_opinion",
+                                f"kept {better.method}: {t}h/{w}d",
+                                model=self.s.second_opinion_model)
                         results[i] = better
+        done(self._agent_for(results[0].method) if results else "Normalizer")
         return results
 
     def _should_escalate(self, res: NormResult) -> bool:
@@ -208,15 +255,38 @@ class TimesheetPipeline:
             return True
         return res.needs_llm or res.confidence < self.s.llm_confidence_threshold
 
-    def _escalate(self, raw, month, year, client_hint, current: NormResult
-                  ) -> Optional[NormResult]:
+    def _escalate(self, raw, month, year, client_hint, current: NormResult,
+                  act=None) -> Optional[NormResult]:
+        act = act or (lambda *a, **k: None)
         try:
             llm_res = self.llm_norm.normalize(raw, month, year, client_hint)
         except Exception as exc:
             log.warning("LLM escalation failed for %s: %s", raw.file, exc)
+            act("Normalizer:Cloud", "escalated", f"failed: {exc}", ok=False)
             return None
         if llm_res is None:
             return None
+
+        # Plausibility gate on FREE local-model reads (bench: qwen can fabricate a
+        # full month of 0h entries on sparse sheets). Implausible -> retry on cloud.
+        if ":local/" in (llm_res.method or "") or "local/" in (llm_res.method or ""):
+            worked, total = self._worked_total(llm_res)
+            has_any = llm_res.entries or llm_res.weekly_totals or llm_res.stated_total
+            if not has_any or worked > 23 or total > 300:
+                act("Normalizer:Local", "rejected",
+                    f"implausible local read ({total}h/{worked}d) -- retrying on cloud",
+                    model=llm_res.method.split(":", 1)[-1], ok=False)
+                try:
+                    cloud = self.llm_norm.normalize(raw, month, year, client_hint,
+                                                    no_local=True)
+                except Exception:
+                    cloud = None
+                if cloud is not None:
+                    llm_res = cloud
+            else:
+                act("Normalizer:Local", "normalized",
+                    f"{total}h/{worked}d (free local model)",
+                    model=llm_res.method.split(":", 1)[-1])
 
         # Score by *usable* data (entries/weeks carrying at least one hour value),
         # not raw cardinality -- a vision pass can emit one all-null entry per day
@@ -233,7 +303,13 @@ class TimesheetPipeline:
         # replace only on a strict improvement (or when deterministic had nothing)
         if llm_data > cur_data or (cur_data == 0 and llm_data > 0):
             llm_res.notes.append(f"escalated from deterministic ({current.method})")
+            act(self._agent_for(llm_res.method), "accepted",
+                f"{llm_res.method}: {llm_data} usable entries (was {cur_data})",
+                model=(llm_res.method.split(":", 1)[-1] if ":" in llm_res.method else None))
             return llm_res
+        act(self._agent_for(llm_res.method), "rejected",
+            f"no improvement over {current.method} ({llm_data} vs {cur_data} usable)",
+            ok=False)
         return current
 
     @staticmethod
@@ -260,7 +336,7 @@ class TimesheetPipeline:
         more trusted reader on hard files, so keep its result whenever it produces
         a PLAUSIBLE read -- this corrects both over- and under-reads from the cheap
         primary model, not just sparse ones."""
-        model = self.s.escalation_model
+        model = self.s.second_opinion_model
         keys = [f"TSE_MODEL_{t.upper()}" for t in
                 ("classify", "vision", "table", "normalize", "validate")]
         old = {k: os.environ.get(k) for k in keys}

@@ -47,6 +47,18 @@ class Settings(BaseSettings):
 
     routing_yaml: str = str(DEFAULT_MODELS_YAML)
 
+    # ---- flow ----
+    # "premium": deterministic -> gpt-4o-mini -> selective gemini second opinion.
+    # "budget":  deterministic -> FREE local LLM (Ollama) for text -> gpt-4o-mini
+    #            fallback + vision; gemini hard-off. Near-zero cost, slower.
+    flow: str = "premium"                    # TSE_FLOW
+    use_local_llm: str = "auto"              # auto (= on in budget flow) | on | off
+    local_llm_base_url: str = "http://localhost:11434"
+    local_llm_model: str = "qwen2.5:7b-instruct"
+    local_llm_timeout_seconds: float = 240.0  # bench worst case 165s + headroom
+    local_llm_num_ctx: int = 16384            # full engine prompt fits (bench-proven)
+    agent_trace: bool = True                  # per-file internal sub-agent traces
+
     # ---- behaviour ----
     llm_policy: str = "on_low_confidence"   # never | on_low_confidence | always
     llm_confidence_threshold: float = 0.6
@@ -55,6 +67,24 @@ class Settings(BaseSettings):
     # "" disables it; most files stay on the cheap primary model.
     escalation_model: str = "google/gemini-2.5-pro"
     escalation_min_confidence: float = 0.6
+
+    @property
+    def is_budget(self) -> bool:
+        return self.flow.strip().lower() == "budget"
+
+    @property
+    def local_llm_enabled(self) -> bool:
+        v = self.use_local_llm.strip().lower()
+        if v in ("on", "true", "1"):
+            return True
+        if v in ("off", "false", "0"):
+            return False
+        return self.is_budget                 # "auto": budget=on, premium=off
+
+    @property
+    def second_opinion_model(self) -> str:
+        """Gemini tier is hard-off in the budget flow."""
+        return "" if self.is_budget else self.escalation_model
     use_local_ocr: bool = True
     # OCR engine for scanned/image timesheets: "auto" prefers PaddleOCR when it's
     # installed (far better on faint/light-text grids: ~98 vs ~75 confidence),
@@ -72,7 +102,10 @@ class Settings(BaseSettings):
     # mean tesseract word confidence (0-100) above which the OCR-layout text is
     # used to GROUND the vision model (exact cell values); below it the model
     # reads the image freely (poor OCR would otherwise suppress real reads).
-    ocr_ground_min_confidence: float = 55.0
+    # Bench on 6 real scans: tesseract's worst CONTENT failures scored 65-75 conf
+    # (never escalated at the old 55 threshold) while its only good read scored
+    # 88 -- clean separation at ~80. Below this, PaddleOCR takes over.
+    ocr_ground_min_confidence: float = 80.0
     max_pdf_pages: int = 60          # cap rasterization/OCR per file (DoS guard)
     max_excel_cols: int = 64         # cap columns materialized per sheet
     llm_timeout_seconds: float = 120.0   # gemini-2.5-pro reasoning can run long

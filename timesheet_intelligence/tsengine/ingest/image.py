@@ -35,7 +35,7 @@ def extract(path: str | Path, settings: Optional[Settings] = None) -> RawExtract
     raw.sources.append(SourceRef(file=rel, page=1, extractor="image"))
 
     if tesseract_available(s) and s.use_local_ocr:
-        txt, conf = layout_ocr(p, s)        # layout-aware: keeps grid structure
+        txt, conf = layout_ocr(p, s, meta_out=raw.meta)  # layout-aware: keeps grid structure
         raw.text = txt.strip()
         raw.meta["ocr_confidence"] = conf
     if not raw.text:

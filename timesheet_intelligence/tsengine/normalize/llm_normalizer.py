@@ -47,7 +47,8 @@ class LLMNormalizer:
                    for w in res.weekly_totals)
 
     def normalize(self, raw: RawExtraction, month: int, year: int,
-                  client_hint: Optional[str] = None) -> Optional[NormResult]:
+                  client_hint: Optional[str] = None,
+                  no_local: bool = False) -> Optional[NormResult]:
         if not self.enabled:
             return None
         # Image-bearing documents (scanned PDFs, photos, image-only DOCX) are read
@@ -66,7 +67,8 @@ class LLMNormalizer:
             if self._has_data(primary):
                 return primary
             if raw.text.strip():
-                alt = self._text_pages_or_single(raw, month, year, client_hint)
+                alt = self._text_pages_or_single(raw, month, year, client_hint,
+                                                 no_local=no_local)
                 if self._has_data(alt):
                     return alt
             return primary
@@ -74,7 +76,8 @@ class LLMNormalizer:
         # Native-text documents. Multi-page text (one weekly grid per page) is
         # normalized page-by-page and aggregated, so a 5-week PDF doesn't collapse
         # to a single week. A vision fallback covers garbage / image-only pages.
-        primary = self._text_pages_or_single(raw, month, year, client_hint)
+        primary = self._text_pages_or_single(raw, month, year, client_hint,
+                                             no_local=no_local)
         if self._has_data(primary):
             return primary
         if raw.images:
@@ -83,23 +86,25 @@ class LLMNormalizer:
                 return alt
         return primary
 
-    def _text_pages_or_single(self, raw, month, year, client_hint) -> Optional[NormResult]:
+    def _text_pages_or_single(self, raw, month, year, client_hint,
+                              no_local: bool = False) -> Optional[NormResult]:
         """Per-page text normalization when the text carries page markers
         (one grid per page); otherwise a single text call."""
         import re as _re
         chunks = _re.split(r"-{3,}\s*page\s+\d+[^\n]*-{3,}", raw.text)
         chunks = [c.strip() for c in chunks if len(c.strip()) > 40]
         if len(chunks) >= 2:
-            return self._text_per_page(raw, chunks, month, year, client_hint)
-        return self._text(raw, month, year, client_hint)
+            return self._text_per_page(raw, chunks, month, year, client_hint,
+                                       no_local=no_local)
+        return self._text(raw, month, year, client_hint, no_local=no_local)
 
     def _page_call(self, task, messages, raw, month, year, client_hint, order,
-                   quality, label):
+                   quality, label, no_local=False):
         """One page's LLM call, retried once if it yields no data (model variance
         on a hard page would otherwise silently drop that page's whole week)."""
         last = (None, None)
         for _ in range(2):
-            out = self.router.run(task, messages)
+            out = self.router.run(task, messages, no_local=no_local)
             if not out.ok or not isinstance(out.data, dict):
                 continue
             pr = self._from_contract(out.data, raw, month, year, client_hint,
@@ -116,19 +121,23 @@ class LLMNormalizer:
         import concurrent.futures
         if len(page_args) <= 1:
             return [self._page_call(*a) for a in page_args]
-        workers = min(4, len(page_args))
+        # Ollama serializes requests; parallel 160-s local calls would just queue.
+        workers = 1 if self.router.s.local_llm_enabled else min(4, len(page_args))
+        if workers == 1:
+            return [self._page_call(*a) for a in page_args]
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
             return list(ex.map(lambda a: self._page_call(*a), page_args))
 
-    def _text_per_page(self, raw, page_chunks, month, year, client_hint
-                       ) -> Optional[NormResult]:
+    def _text_per_page(self, raw, page_chunks, month, year, client_hint,
+                       no_local: bool = False) -> Optional[NormResult]:
         order = self._infer_order(raw, month, year)
         by_date: dict[dt.date, DayEntry] = {}
         weekly: list[WeeklyTotal] = []
         names, clients, projects, notes, confs = [], [], [], [], []
         used, model = 0, None
         page_args = [("normalize", normalize_text_messages(chunk, "", month, year),
-                      raw, month, year, client_hint, order, raw.quality, "llm_text")
+                      raw, month, year, client_hint, order, raw.quality, "llm_text",
+                      no_local)
                      for chunk in page_chunks[:12]]
         for pr, m in self._parallel_pages(page_args):
             if pr is None:
@@ -271,10 +280,11 @@ class LLMNormalizer:
             month, year)
 
     # -- text/table path ------------------------------------------------------
-    def _text(self, raw, month, year, client_hint) -> Optional[NormResult]:
+    def _text(self, raw, month, year, client_hint,
+              no_local: bool = False) -> Optional[NormResult]:
         tables_dump = dump_tables_for_prompt(raw.tables)
         msgs = normalize_text_messages(raw.text, tables_dump, month, year)
-        out = self.router.run("normalize", msgs)
+        out = self.router.run("normalize", msgs, no_local=no_local)
         if not out.ok:
             return None
         return self._from_contract(out.data, raw, month, year, client_hint,

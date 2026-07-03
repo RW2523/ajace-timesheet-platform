@@ -51,7 +51,7 @@ def extract(path: str | Path, settings: Optional[Settings] = None) -> RawExtract
             # layout-aware OCR keeps the grid structure (rows/columns), which both
             # reads more accurately and stops a vision model later from inventing
             # values into blank cells.
-            txt, conf = layout_ocr(png, s)
+            txt, conf = layout_ocr(png, s, meta_out=raw.meta)
             if txt.strip():
                 text_parts.append(f"\n----- page {pno} (OCR) -----\n{txt}")
                 confs.append(conf)

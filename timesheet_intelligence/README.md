@@ -296,3 +296,40 @@ A full run over a heterogeneous May folder (70 files, 6 clients) drove these:
   by default can short-circuit to a wrong partial summary and suppress the LLM that
   would resolve a file correctly. Flip on once `normalize/` table-selection +
   confidence-gating is tuned and validated against live LLM. Install: `pip install docling`.
+
+## Two processing flows (v1.1)
+
+Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same
+deterministic-first parser stack — the flow only changes what happens when a
+file needs an LLM:
+
+| Stage | budget (near-zero cost) | premium (max accuracy) |
+|---|---|---|
+| Deterministic parsers | identical (benchmark-validated layering) | identical |
+| Text normalization | **FREE local LLM** (Ollama `qwen2.5:7b-instruct`), plausibility-gated, gpt-4o-mini fallback | gpt-4o-mini |
+| Vision (scans/photos) | gpt-4o-mini (local models have no vision) | gpt-4o-mini |
+| Hard-file second opinion | off | **gemini-2.5-pro** (selective) |
+| PaddleOCR faint-scan escalation | on | on |
+
+Budget-flow local LLM needs [Ollama](https://ollama.com) + `ollama pull
+qwen2.5:7b-instruct` (~4.7 GB); without it the budget flow transparently uses
+gpt-4o-mini. Local calls run ~40–165 s/file (free but slow) and are
+plausibility-gated: an implausible local read (fabricated days, >300h) is
+rejected and retried on the cloud model automatically.
+
+### Parser choices are benchmark-driven (real-dataset A/B, June 2026)
+
+Measured on the actual April+May folders, deterministic-resolution rate:
+pdfplumber beat Docling and pymupdf4llm on native PDFs (7/16 vs 4 and 3, and the
+alternatives corrupted files the baseline got right); the current openpyxl
+ingest beat MarkItDown and Docling on office files (9/13); PaddleOCR beat
+tesseract on all 6 hard scans (conf 96–100 vs 40–88) → it now takes over
+whenever tesseract confidence < 80. Legacy `.xls` converts via a pandas/xlrd
+fast-path (0.02 s) before falling back to LibreOffice.
+
+### Internal sub-agents (per-file audit trace)
+
+Every processed file gets a `FileTrace` in `report.agent_traces`: which agent
+(Classifier → Parser → OCR → Normalizer / Normalizer:Local / Normalizer:Cloud /
+VisionReader → Reconciler) acted, what it decided, and which model it used.
+`GET /api/health` reports the active flow + local-LLM availability.
