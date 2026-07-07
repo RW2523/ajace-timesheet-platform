@@ -36,3 +36,6 @@ out/
 
 # generated evaluation reports (contain employee PII; regenerated per run)
 /reports/
+
+# runtime tunnel URL (written by the tunnel script; ephemeral)
+.engine_tunnel_url
