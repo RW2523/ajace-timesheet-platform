@@ -321,6 +321,73 @@ def _strategy_weekly_totals(table: RawTable, order: str, month: int, year: int
     return res
 
 
+def _strategy_weekly_ranges(table: RawTable, order: str, month: int, year: int
+                            ) -> Optional[NormResult]:
+    """Headerless weekly-range grids (a common corporate export):
+
+        May | Week 1 | 01-May-2026 | 02-May-2026 | 1  | 8
+        May | Week 2 | 03-May-2026 | 09-May-2026 | 5  | 40
+        ...                                       | Total Hours | 160
+
+    Each data row carries TWO dates (week start/end) and a trailing hours value;
+    there is no keyword header, so ``_strategy_weekly_totals`` can't see it. We key
+    off structure instead: >=2 rows that each hold two multi-day-apart dates plus a
+    number. A row labeled 'total' contributes ``stated_total``. Capped at 8 weekly
+    rows so a 20-30 row daily grid never masquerades as weekly ranges.
+    """
+    grid = [r for r in table.rows]
+    if len(grid) < 2:
+        return None
+    res = NormResult(file=table.source.file, method="weekly_ranges",
+                     quality=ExtractionQuality.NATIVE)
+    for ri, row in enumerate(grid):
+        dates: list[tuple[int, dt.date]] = []
+        nums: list[tuple[int, float]] = []
+        for ci, cell in enumerate(row):
+            # Only a cell that LOOKS like a real date (has a day+month, not a bare
+            # "May" or a lone integer) counts as a week boundary -- otherwise bare
+            # month names parse to the 1st and day-counts parse as dates, collapsing
+            # every row's range to the month start.
+            d = D.parse_date(cell, order, year) if _DATE_LINE.search(str(cell)) else None
+            if d is not None:
+                dates.append((ci, d))
+            else:
+                h = H.parse_hours(cell)
+                if h is not None:
+                    nums.append((ci, h))
+        if len(dates) < 2:
+            rowtext = " ".join(_norm(c) for c in row)
+            if "total" in rowtext and nums:
+                st = max(h for _, h in nums)
+                if st > 0:
+                    res.stated_total = st
+            continue
+        ws = min(d for _, d in dates)
+        we = max(d for _, d in dates)
+        if (we - ws).days < 1:                    # need a real span (a partial week
+            continue                              # like May 1-2 is fine; same day isn't)
+        end_ci = max(ci for ci, _ in dates)
+        after = [h for ci, h in nums if ci > end_ci]  # hours sit past the dates
+        hours = max(after) if after else (max((h for _, h in nums), default=None))
+        if hours is None:                         # 0 is valid; only skip missing
+            continue
+        frac = D.week_overlap_fraction(ws, we, month, year)
+        if frac <= 0:
+            continue
+        r_, o_, t_ = H.split_regular_overtime(hours, None, None)
+        src = SourceRef(file=table.source.file, sheet=table.source.sheet,
+                        page=table.source.page, row=ri + 1,
+                        extractor="weekly_ranges")
+        res.weekly_totals.append(WeeklyTotal(
+            week_start=ws, week_end=we, regular_hours=r_, overtime_hours=o_,
+            total_hours=t_, in_month_fraction=round(frac, 3), sources=[src]))
+    if len(res.weekly_totals) < 2 or len(res.weekly_totals) > 8:
+        return None
+    res.confidence = 0.68
+    res.notes.append("weekly totals from a headerless date-range grid")
+    return res
+
+
 def _strategy_weekday_matrix(table: RawTable, order: str, month: int, year: int,
                              context_text: str) -> Optional[NormResult]:
     """Sun..Sat column matrices (e.g. project exports). Needs a date anchor for
@@ -469,6 +536,50 @@ _MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july",
                 "august", "september", "october", "november", "december"]
 
 
+_OCR_NUM = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,2})?(?![\w.:])")
+
+
+def _strategy_ocr_totals(text: str, file: str, quality) -> Optional[NormResult]:
+    """Sum-VERIFIED month total from an OCR'd scan.
+
+    Scans that don't yield a parseable daily grid often still print self-checking
+    rows -- a weekly/total line where the last number equals the sum of the rest:
+
+        WK1  WK2  WK3  WK4  WK5  Total
+        22.5 37.5 37.5 37.5 30   165        (22.5+37.5+37.5+37.5+30 == 165)
+
+        8 8 8 8 8 0 0 40   (x4 weeks)        (8+8+8+8+8+0+0 == 40)
+
+    We accept a number ONLY when it equals the sum of the other numbers on its
+    line, so this can never emit an unverified/guessed total (a stray value that
+    isn't a real subtotal is arithmetically rejected). One verified row -> its last
+    value is the month total; several -> their last values sum to it.
+    """
+    verified: list[float] = []
+    for line in text.splitlines():
+        nums = [float(x) for x in _OCR_NUM.findall(line)]
+        if len(nums) < 3:
+            continue
+        *rest, last = nums
+        if last <= 0:
+            continue
+        s = round(sum(rest), 2)
+        if s > 0 and abs(s - last) <= 0.5:
+            verified.append(last)
+    if not verified:
+        return None
+    total = verified[0] if len(verified) == 1 else round(sum(verified), 2)
+    if total <= 0:
+        return None
+    res = NormResult(file=file, method="ocr_verified_total",
+                     quality=quality, confidence=0.6)
+    res.stated_total = float(total)
+    res.notes.append(
+        f"month total {total:g}h from a sum-verified OCR row "
+        f"({len(verified)} verified subtotal row(s))")
+    return res
+
+
 def _strategy_summary_total(tables, month: int, year: int) -> "Optional[NormResult]":
     """Pull a stated monthly total from a one-row summary table.
 
@@ -549,6 +660,18 @@ class Normalizer:
                 self._attach_identity(text_res, raw, client_hint)
                 return [text_res]
 
+        # Scanned/photo timesheets: try a SUM-VERIFIED total from the OCR text
+        # before escalating to a vision call. Gated to image-bearing docs so a
+        # clean Excel/PDF never reaches this heuristic. Arithmetically self-checking
+        # (last number == sum of the rest), so it can't emit a guessed total.
+        if raw.images and raw.text:
+            ocr_res = _strategy_ocr_totals(raw.text, raw.file, raw.quality)
+            if ocr_res is not None:
+                if merged and merged.entries:
+                    ocr_res.entries = merged.entries       # keep any partial grid
+                self._attach_identity(ocr_res, raw, client_hint)
+                return [ocr_res]
+
         # Summary/cover-sheet table that only states a monthly TOTAL (e.g. an
         # approval email "Total Hours: 160" for the period) -- use it directly
         # rather than burning a vision call that can't find a daily grid.
@@ -579,7 +702,7 @@ class Normalizer:
                     candidates.append(r)
             except Exception:
                 pass
-        for fn in (_strategy_weekly_totals,):
+        for fn in (_strategy_weekly_totals, _strategy_weekly_ranges):
             try:
                 r = fn(table, order, month, year)
                 if r:
@@ -610,6 +733,25 @@ class Normalizer:
             if r.stated_total is not None:
                 merged.stated_total = r.stated_total
             merged.needs_llm = merged.needs_llm or r.needs_llm
+        # A file that has BOTH a daily grid AND a weekly-summary section: the
+        # weekly rows are a redundant recap of the same days, not extra time. The
+        # rollup would otherwise add the weeks' uncovered slivers (weekend/leading
+        # days) on top of the daily entries -> phantom +8h (e.g. Saravanan 168->176).
+        # Drop the redundant weekly rows; keep their sum as a stated_total so the
+        # validator can still flag a daily-vs-summary mismatch for review.
+        data_entries = [e for e in merged.entries
+                        if any(v is not None for v in (e.regular, e.overtime, e.total))]
+        if data_entries and merged.weekly_totals:
+            weeks = {(e.date.isocalendar()[0], e.date.isocalendar()[1])
+                     for e in data_entries if (e.total or e.regular or e.overtime)}
+            if len(weeks) >= 2:
+                wsum = sum(w.total_hours for w in merged.weekly_totals
+                           if w.total_hours is not None)
+                if merged.stated_total is None and wsum > 0:
+                    merged.stated_total = round(wsum, 2)
+                merged.weekly_totals = []
+                merged.notes.append(
+                    "weekly summary rows dropped as redundant with the daily grid")
         # confidence = data-weighted average
         if results:
             merged.confidence = round(
