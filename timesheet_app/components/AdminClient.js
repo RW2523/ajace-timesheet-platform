@@ -203,6 +203,8 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
           </div>
           {q.notes && <div className="alert info" style={{ marginBottom: 16 }}>“{q.notes}”</div>}
 
+          <AgentTrace trace={edit.fields?.agent_trace} flow={edit.fields?.flow} />
+
           <h3 className="card-title">Calendar — click a day to correct as admin</h3>
           <Calendar calendar={days} month={edit.month} year={edit.year} onDayClick={setDayIdx} />
 
@@ -230,6 +232,58 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
       {dayIdx != null && (
         <DayModal day={days[dayIdx]} onClose={() => setDayIdx(null)}
           onSave={(upd) => { const n = days.slice(); n[dayIdx] = upd; setDays(n); setDayIdx(null); }} />
+      )}
+    </div>
+  );
+}
+
+// Shows the engine's internal sub-agent trace for a submission: which agents ran,
+// what they decided, and which model produced the kept numbers. Lets an admin see
+// HOW the figures were derived, right next to the source document.
+function AgentTrace({ trace, flow }) {
+  const [open, setOpen] = useState(false);
+  if (!trace || !Array.isArray(trace.actions) || trace.actions.length === 0) {
+    return null;
+  }
+  const f = flow || trace.flow;
+  const model = (m) => (m || "").replace(/^openai\//, "").replace(/^google\//, "")
+    .replace(/^local\//, "local · ");
+  const icon = {
+    Classifier: "ti-file-search", Parser: "ti-table", OCR: "ti-scan",
+    Normalizer: "ti-adjustments", "Normalizer:Local": "ti-cpu",
+    "Normalizer:Cloud": "ti-cloud", VisionReader: "ti-eye", Reconciler: "ti-scale",
+    Validator: "ti-checks",
+  };
+  return (
+    <div className="card" style={{ background: "var(--surface-2)", marginBottom: 16 }}>
+      <div className="between" style={{ padding: "10px 12px", cursor: "pointer" }}
+        onClick={() => setOpen((o) => !o)}>
+        <div className="row" style={{ gap: 8, alignItems: "center" }}>
+          <span className="card-title" style={{ margin: 0 }}>How the AI processed this</span>
+          {f && <span className={"badge " + (f === "budget" ? "green" : "amber")}>{f} flow</span>}
+          {trace.handled_by && <span className="chip">kept: {trace.handled_by}</span>}
+        </div>
+        <span className="muted" style={{ fontSize: 12 }}>{open ? "hide ▲" : "show ▼"}</span>
+      </div>
+      {open && (
+        <div style={{ borderTop: "1px solid var(--line)", padding: "8px 12px" }}>
+          {trace.actions.map((a, i) => (
+            <div key={i} className="row" style={{
+              gap: 8, alignItems: "baseline", padding: "5px 0",
+              borderBottom: i < trace.actions.length - 1 ? "1px solid var(--line)" : "none",
+              opacity: a.ok === false ? 0.6 : 1,
+            }}>
+              <span className="chip" style={{ minWidth: 118, textAlign: "center" }}>{a.agent}</span>
+              <span style={{ fontSize: 12, color: a.ok === false ? "var(--red)" : "var(--muted)", fontWeight: 600, minWidth: 84 }}>
+                {a.action}
+              </span>
+              <span style={{ fontSize: 12, flex: 1 }}>
+                {a.detail}
+                {a.model && <span className="badge gray" style={{ marginLeft: 6 }}>{model(a.model)}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

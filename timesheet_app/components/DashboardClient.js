@@ -132,6 +132,7 @@ export default function DashboardClient({ profile }) {
       setAiMeta({
         confidence: emp?.confidence, llm_used: data.llm_used,
         count: data.employee_count, fileName: data.file_name,
+        flow: data.flow || null, agentTrace: data.agent_trace || null,
       });
 
       // 3) persist the AI baseline
@@ -220,7 +221,8 @@ export default function DashboardClient({ profile }) {
       const r = rollup(calendar);
       const { error } = await supabase.from("ts_employee_edits").insert({
         timesheet_id: tid, user_id: uid, month, year,
-        fields: { ...fields, totals: r },
+        fields: { ...fields, totals: r,
+                  flow: aiMeta?.flow || null, agent_trace: aiMeta?.agentTrace || null },
         days: calendar,
         questionnaire: { ...q, holidayWork },
         validation: { errors: validation.errors, warnings: validation.warnings },
