@@ -183,11 +183,11 @@ class DirectExtractor:
         discs = sc.get("discrepancies") or []
         for d in discs:
             res.notes.append(f"self-check: {d}")
-        # a self-check discrepancy the model couldn't resolve -> route to a human
-        # (validator turns needs_llm into review), but do NOT burn a bigger model.
-        if (sc.get("matches_stated_total") is False or
-                sc.get("per_day_reg_ot_consistent") is False) and discs:
-            res.needs_llm = True
+        # A self-check discrepancy is a "give it a glance" signal, NOT a block. If
+        # it reflects a real stated-total-vs-sum gap, the validator's own
+        # TOTAL_MISMATCH check will surface it as a warning (-> needs_review). We do
+        # NOT set needs_llm here (that maps to "blocked") -- only a genuine
+        # cross-model disagreement or a hard validator error blocks a record.
         # prefer the model's explicit month total when the daily sum is silent
         if res.stated_total is None:
             st = data.get("stated_total")

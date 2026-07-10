@@ -85,11 +85,14 @@ def test_direct_escalates_on_low_confidence():
 
 
 def test_direct_self_check_mismatch_routes_to_review_not_escalation():
-    # confident but the doc's stated total != daily sum -> keep primary, flag review
+    # confident but the doc's stated total != daily sum -> keep primary, note it
+    # (validator's TOTAL_MISMATCH warning routes to needs_review); do NOT escalate
+    # and do NOT block on the self-check alone.
     ext, s = _extractor({"*": _mega(conf=0.9, matches=False, discs=["stated 168 != sum 176"])})
     res = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
     assert ext.router.client.calls == ["openai/gpt-5.4-nano"]  # did NOT escalate
-    assert res[0].needs_llm is True                            # -> review
+    assert res[0].needs_llm is False                           # self-check alone != block
+    assert any("self-check" in n for n in res[0].notes)        # but it IS surfaced
 
 
 def test_direct_rejects_non_timesheet():
