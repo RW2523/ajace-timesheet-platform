@@ -16,8 +16,34 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
   const [detail, setDetail] = useState(null);
   const [triage, setTriage] = useState("all");
 
-  const totalHours = edits.reduce((a, e) => a + (e.fields?.totals?.total || 0), 0);
-  const flagged = edits.filter((e) => (e.validation?.errors?.length || 0) > 0).length;
+  // ----- month/period selector -----
+  const MONTHS = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"];
+  // periods that actually have data, newest first; default to the one with the
+  // most submissions so the console opens on the month that matters.
+  const periods = useMemo(() => {
+    const m = {};
+    const bump = (x) => {
+      if (x.month == null || x.year == null) return;
+      const k = `${x.year}-${x.month}`;
+      m[k] = m[k] || { key: k, year: x.year, month: x.month, n: 0 };
+    };
+    files.forEach(bump); adminEdits.forEach(bump); edits.forEach(bump);
+    edits.forEach((e) => { const k = `${e.year}-${e.month}`; if (m[k]) m[k].n++; });
+    return Object.values(m).sort((a, b) => (b.year - a.year) || (b.month - a.month));
+  }, [edits, files, adminEdits]);
+  const defaultPeriod = useMemo(
+    () => ([...periods].sort((a, b) => b.n - a.n)[0]?.key || "all"), [periods]);
+  const [period, setPeriod] = useState(defaultPeriod);
+  const label = (p) => `${MONTHS[p.month - 1]} ${p.year}`;
+
+  const inPeriod = (x) => period === "all" || `${x.year}-${x.month}` === period;
+  const pEdits = edits.filter(inPeriod);
+  const pFiles = files.filter(inPeriod);
+  const pAdminEdits = adminEdits.filter(inPeriod);
+
+  const totalHours = pEdits.reduce((a, e) => a + (e.fields?.totals?.total || 0), 0);
+  const flagged = pEdits.filter((e) => (e.validation?.errors?.length || 0) > 0).length;
 
   // Triage bucket for a submission: prefer the engine's review_status; fall back
   // to the stored validation (older submissions predate review_status).
@@ -28,21 +54,34 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
       : (e.validation?.warnings?.length || 0) > 0 ? "needs_review" : "needs_review";
   };
   const counts = { auto_accepted: 0, needs_review: 0, blocked: 0 };
-  edits.forEach((e) => { counts[reviewOf(e)]++; });
-  const shownEdits = triage === "all" ? edits : edits.filter((e) => reviewOf(e) === triage);
+  pEdits.forEach((e) => { counts[reviewOf(e)]++; });
+  const shownEdits = triage === "all" ? pEdits : pEdits.filter((e) => reviewOf(e) === triage);
 
   return (
     <>
       <Topbar profile={profile} active="admin" />
       <div className="container" style={{ padding: "22px 24px 60px" }}>
-        <h1 style={{ fontSize: 22, marginBottom: 4 }}>Admin console</h1>
-        <p className="muted" style={{ marginBottom: 18 }}>
-          Review employee submissions, audit edits, and make corrections.
-        </p>
+        <div className="between" style={{ flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
+          <div>
+            <h1 style={{ fontSize: 22, marginBottom: 4 }}>Admin console</h1>
+            <p className="muted">Review employee submissions, audit edits, and make corrections.</p>
+          </div>
+          {periods.length > 0 && (
+            <div className="field" style={{ margin: 0, minWidth: 190 }}>
+              <label>Month</label>
+              <select value={period} onChange={(e) => setPeriod(e.target.value)}>
+                {periods.map((p) => (
+                  <option key={p.key} value={p.key}>{label(p)} ({p.n})</option>
+                ))}
+                <option value="all">All months ({edits.length})</option>
+              </select>
+            </div>
+          )}
+        </div>
 
-        <div className="tiles" style={{ marginBottom: 20 }}>
-          <div className="tile"><div className="v">{profiles.length}</div><div className="l">Employees</div></div>
-          <div className="tile"><div className="v">{edits.length}</div><div className="l">Submissions</div></div>
+        <div className="tiles" style={{ margin: "14px 0 20px" }}>
+          <div className="tile"><div className="v">{new Set(pEdits.map((e) => e.user_id)).size}</div><div className="l">Employees this month</div></div>
+          <div className="tile"><div className="v">{pEdits.length}</div><div className="l">Submissions</div></div>
           <div className="tile tot"><div className="v">{Math.round(totalHours)}</div><div className="l">Total hours</div></div>
           <div className="tile"><div className="v" style={{ color: flagged ? "var(--red)" : "var(--green)" }}>{flagged}</div><div className="l">With errors</div></div>
         </div>
@@ -53,7 +92,7 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
           {[["submissions", "Submissions"], ["employees", "Employees"], ["files", "Files"], ["revisions", "Admin revisions"]].map(([k, label]) => (
             <div key={k} className={"tab" + (tab === k ? " active" : "")} onClick={() => setTab(k)}>
               {label}
-              {k === "revisions" && adminEdits.length > 0 && <span className="badge gray" style={{ marginLeft: 6 }}>{adminEdits.length}</span>}
+              {k === "revisions" && pAdminEdits.length > 0 && <span className="badge gray" style={{ marginLeft: 6 }}>{pAdminEdits.length}</span>}
             </div>
           ))}
         </div>
@@ -121,8 +160,8 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
 
         {tab === "files" && (
           <Table headers={["Employee", "File", "Period", "Type", "Size", "Uploaded", ""]}>
-            {files.length === 0 && <Empty cols={7} text="No files uploaded yet." />}
-            {files.map((f) => {
+            {pFiles.length === 0 && <Empty cols={7} text="No files for this month." />}
+            {pFiles.map((f) => {
               const p = pmap[f.user_id] || {};
               return (
                 <tr key={f.id}>
@@ -141,8 +180,8 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
 
         {tab === "revisions" && (
           <Table headers={["Employee", "Period", "Edited by admin", "Note", "When"]}>
-            {adminEdits.length === 0 && <Empty cols={5} text="No admin revisions yet." />}
-            {adminEdits.map((a) => {
+            {pAdminEdits.length === 0 && <Empty cols={5} text="No admin revisions for this month." />}
+            {pAdminEdits.map((a) => {
               const p = pmap[a.employee_user_id] || {};
               const ad = pmap[a.admin_user_id] || {};
               return (
