@@ -27,13 +27,13 @@ export async function POST(request) {
     return NextResponse.json({ error: "file, month, year required" }, { status: 400 });
   }
 
-  // Admin-chosen AI flow ("budget" = free local model first, "premium" =
-  // cloud + gemini second opinion). Defaults to premium if unset/unreadable.
-  let flow = "premium";
+  // Admin-chosen AI flow: "direct" = whole file to the GPT-5.4 ladder (default),
+  // "premium" = parse + gpt-4o-mini + gemini, "budget" = free local model first.
+  let flow = "direct";
   try {
     const { data: fs } = await supabase
       .from("ts_app_settings").select("value").eq("key", "ai_flow").single();
-    if (fs?.value === "budget" || fs?.value === "premium") flow = fs.value;
+    if (["direct", "budget", "premium"].includes(fs?.value)) flow = fs.value;
   } catch { /* keep default */ }
 
   try {
