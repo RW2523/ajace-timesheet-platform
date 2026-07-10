@@ -1,0 +1,20 @@
+{
+  "_note": "Verified monthly totals for April/May 2026 (invoice-confirmed or audited during development). Used by scripts/eval_flows.py to score any flow. `file` is matched by basename via rglob under the data roots.",
+  "roots": [
+    "/Users/richardwatsonstephenamudha/Documents/aj_t/Timesheet",
+    "/Users/richardwatsonstephenamudha/Documents/aj_t/TimeSheet-May"
+  ],
+  "cases": [
+    {"file": "Elangovan TS April 2026.pdf", "month": 4, "year": 2026, "total": 136.0, "days": 17},
+    {"file": "Jude TS April 2026.pdf", "month": 4, "year": 2026, "total": 176.0, "days": 22},
+    {"file": "Suganthan TS April 2026.pdf", "month": 4, "year": 2026, "total": 176.0, "days": 22},
+    {"file": "Suman_April_2026.png", "month": 4, "year": 2026, "total": 160.0, "days": 20},
+    {"file": "Santhosh TS April 2026.png", "month": 4, "year": 2026, "total": 165.0, "days": null},
+    {"file": "Rajani TS April 2026.png", "month": 4, "year": 2026, "total": 176.0, "days": 22, "source": "invoice-confirmed"},
+    {"file": "Ravikumar_Ponraj TS April -2026.pdf", "month": 4, "year": 2026, "total": 24.0, "days": 3},
+    {"file": "Saravanan TimeSheet-May 2026.xlsx", "month": 5, "year": 2026, "total": 168.0, "days": 21},
+    {"file": "Ravi TS May -2026.pdf", "month": 5, "year": 2026, "total": 160.0, "days": 20},
+    {"file": "Elangovan TS May-2026.pdf", "month": 5, "year": 2026, "total": 192.0, "days": 24},
+    {"file": "Rajani -TS May -2026.png", "month": 5, "year": 2026, "total": 176.0, "days": 20, "source": "invoice-confirmed"}
+  ]
+}

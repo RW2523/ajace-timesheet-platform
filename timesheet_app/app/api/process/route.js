@@ -48,6 +48,7 @@ export async function POST(request) {
       totals: rollup(calendar),
       llm_used: result.llm_used,
       flow: result.flow || flow,
+      review_status: result.review_status || null,
       agent_trace: result.agent_trace || null,
       file_name: result.file_name,
       raw_employees: result.employees,

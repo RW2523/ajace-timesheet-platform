@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from typing import Optional
 
+import calendar as _calendar
+import datetime as _dt
+
 from ..llm.prompts import reconcile_messages
 from ..llm.router import ModelRouter
-from ..schema import (DayRecord, EmployeeMonth, Issue, IssueCode, IssueSeverity)
+from ..schema import (DayRecord, EmployeeMonth, Issue, IssueCode, IssueSeverity,
+                      ReviewStatus)
 from ..settings import Settings, get_settings
 
 
@@ -23,8 +27,46 @@ class Validator:
     def validate(self, em: EmployeeMonth) -> EmployeeMonth:
         for d in em.days:
             self._check_day(d)
+        self._check_month(em)
         self._maybe_reconcile(em)
+        em.review_status = self._route(em)
         return em
+
+    # -- month-level sanity checks (the "after extraction" gaps) --------------
+    def _check_month(self, em: EmployeeMonth):
+        # 1) implausibly high month total (over-read) -- upper bound complements
+        #    the registry's under-read guard.
+        if (em.monthly_total or 0) > 230:
+            em.issues.append(Issue(
+                code=IssueCode.OUT_OF_RANGE, severity=IssueSeverity.WARNING,
+                message=f"month total {em.monthly_total}h is unusually high (>230h); verify"))
+        # 2) days_worked cannot exceed the working days in the month.
+        weekdays = sum(1 for day in range(1, _calendar.monthrange(em.year, em.month)[1] + 1)
+                       if _dt.date(em.year, em.month, day).weekday() < 5)
+        if (em.days_worked or 0) > weekdays:
+            em.issues.append(Issue(
+                code=IssueCode.INVALID, severity=IssueSeverity.ERROR,
+                message=(f"{em.days_worked} days worked exceeds {weekdays} weekdays "
+                         f"in the month -- impossible; re-check")))
+        # 3) overtime present -> flag for explicit approval sign-off.
+        if (em.monthly_overtime or 0) > 0:
+            em.issues.append(Issue(
+                code=IssueCode.OUT_OF_RANGE, severity=IssueSeverity.INFO,
+                message=f"{em.monthly_overtime}h overtime present; confirm it was approved"))
+
+    # -- human-review routing gate -------------------------------------------
+    def _route(self, em: EmployeeMonth) -> str:
+        issues = em.all_issues
+        has_error = any(i.severity == IssueSeverity.ERROR for i in issues)
+        has_conflict = any(i.code in (IssueCode.CONFLICT, IssueCode.NEEDS_LLM)
+                           for i in issues)
+        has_warning = any(i.severity == IssueSeverity.WARNING for i in issues)
+        conf = em.confidence or 0.0
+        if has_error or has_conflict or conf < 0.6:
+            return ReviewStatus.BLOCKED.value
+        if has_warning or conf < self.s.direct_autoaccept_confidence:
+            return ReviewStatus.NEEDS_REVIEW.value
+        return ReviewStatus.AUTO_ACCEPTED.value
 
     def _check_day(self, d: DayRecord):
         r, o, t = d.regular_hours, d.overtime_hours, d.total_hours

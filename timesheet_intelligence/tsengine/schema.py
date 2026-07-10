@@ -109,6 +109,12 @@ class Issue(BaseModel):
     sources: list[SourceRef] = Field(default_factory=list)
 
 
+class ReviewStatus(str, Enum):
+    AUTO_ACCEPTED = "auto_accepted"   # clean + confident -> no human needed
+    NEEDS_REVIEW = "needs_review"     # warnings / medium confidence -> admin queue
+    BLOCKED = "blocked"               # errors / conflicts / low confidence -> must fix
+
+
 # --------------------------------------------------------------------------- #
 # Canonical timesheet model
 # --------------------------------------------------------------------------- #
@@ -190,6 +196,8 @@ class EmployeeMonth(BaseModel):
     source_files: list[str] = Field(default_factory=list)
     extraction_methods: list[str] = Field(default_factory=list)
     confidence: float = 0.0
+    flow: str = "premium"                                  # which flow produced this
+    review_status: str = ReviewStatus.NEEDS_REVIEW.value   # triage gate
 
     @property
     def all_issues(self) -> list[Issue]:

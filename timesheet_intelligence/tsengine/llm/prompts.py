@@ -162,3 +162,115 @@ def dump_tables_for_prompt(tables: list[Any]) -> str:
             out.append(" | ".join("" if c is None else str(c) for c in r))
         out.append("")
     return "\n".join(out)
+
+
+# --------------------------------------------------------------------------- #
+# DIRECT TRACK: the whole file is sent to a vision model with this single
+# exhaustive contract. It is a SUPERSET of CANONICAL_CONTRACT (same
+# employee_name / entries / weekly_totals / stated_total / confidence keys, so
+# the existing _from_contract mapper works unchanged) plus every extra field the
+# app needs -- period, identity, questionnaire prefills, per-field confidence,
+# provenance, a document classification, and a mandatory self-check.
+# --------------------------------------------------------------------------- #
+DIRECT_MEGA_CONTRACT = """
+Return ONLY a single JSON object with EXACTLY this shape. Fill EVERY field; use
+null / [] when a datum is genuinely absent -- never omit a key, never guess.
+
+{
+  "document_type": "timesheet" | "invoice" | "approval_email" | "cover_sheet" | "other",
+  "is_timesheet": boolean,
+  "multiple_employees": boolean,          // true if the file holds >1 person's time
+
+  "employee_name": string | null,         // the WORKER/contractor (never the approver,
+                                           // manager, company, address, city, or project)
+  "employee_id": string | null,
+  "employer": string | null,              // the vendor/staffing company employing them
+  "client": string | null,                // the client/company the work was for
+  "project": string | null,               // project or task name/id
+  "manager_name": string | null,          // approver / engagement manager, if shown
+  "approval_status": string | null,       // e.g. "approved", "signed", "pending", null
+
+  "period_start": "YYYY-MM-DD" | null,     // period start AS PRINTED
+  "period_end": "YYYY-MM-DD" | null,       // period end AS PRINTED
+
+  "entries": [                             // one object PER CALENDAR DATE that is shown
+    {
+      "date": "YYYY-MM-DD",
+      "regular_hours": number | null,
+      "overtime_hours": number | null,
+      "sick_hours": number | null,
+      "vacation_hours": number | null,     // PTO/vacation
+      "holiday_hours": number | null,
+      "total_hours": number | null,        // if a single number is given, put it here
+      "time_in": string | null,            // "09:00" if shown
+      "time_out": string | null,
+      "project": string | null,
+      "note": string | null,
+      "raw": string | null,                // the literal text you read this from
+      "confidence": number                 // 0..1 for THIS day
+    }
+  ],
+  "weekly_totals": [                        // ONLY when the source is weekly, not daily
+    { "week_start": "YYYY-MM-DD", "week_end": "YYYY-MM-DD",
+      "regular_hours": number | null, "overtime_hours": number | null,
+      "total_hours": number | null }
+  ],
+
+  "stated_regular": number | null,          // a MONTH regular total printed on the doc
+  "stated_overtime": number | null,
+  "stated_total": number | null,            // the MONTH total printed on the doc (a
+                                            // "Total Hours" box / "Approved 168h")
+
+  "questionnaire": {
+    "worked_weekends": "yes" | "no" | null, // from the data: any Sat/Sun hours?
+    "holidays_worked": [ "YYYY-MM-DD" ],    // holiday dates that show hours worked
+    "pto_days": number | null,              // count of PTO/vacation days taken
+    "holidays_taken": number | null
+  },
+
+  "provenance": {
+    "pages_read": number,                   // how many pages you actually read
+    "value_pages": { "monthly_total": number | null }  // page # a key value came from
+  },
+  "ambiguities": [ string ],                // e.g. "May 14 cell smudged; read as 8?"
+  "handwritten_or_faint": boolean,
+  "confidence": number,                     // 0..1 OVERALL
+
+  "self_check": {                           // you MUST compute this before answering
+    "sum_of_daily_totals": number,          // add up every entry.total_hours
+    "matches_stated_total": boolean,        // == stated_total (within 0.5h)?
+    "per_day_reg_ot_consistent": boolean,   // every day: regular+overtime == total?
+    "discrepancies": [ string ]             // describe any mismatch you found
+  }
+}
+
+RULES (follow ALL -- these mirror how a careful human reads a timesheet):
+- employee_name is the PERSON whose time this is. NEVER a company, address, city,
+  project, or the APPROVER/MANAGER. If no person name is visible, null.
+- READ EVERY WEEK / EVERY PAGE / THE WHOLE CALENDAR. Timesheets often stack
+  several weekly grids (one per page). Emit an entry for EVERY dated day with
+  hours across ALL of them; do not stop after the first week.
+- Use the EXACT dates printed. Include a date ONLY if it is actually shown with
+  hours. Do NOT invent, extrapolate, or fill days/weeks that are not present.
+- Blank/empty/illegible cell = null (add an ambiguity note). 0 = 0. NEVER a
+  guessed 8. Weekends are NOT assumed worked -- a blank weekend is null/0.
+- If the document's dates are for a DIFFERENT month than the target, return an
+  empty entries list -- never shift dates into the target month.
+- PROJECT MATRICES (rows = projects, columns = weekdays): each date's total is
+  the SUM across ALL project rows for that date. Go through every row.
+- Separate overtime from regular ONLY when the source explicitly distinguishes
+  them; otherwise put everything in total_hours.
+- COMPUTE self_check for real: add the daily totals, compare to any printed
+  total, verify each day's regular+overtime==total, and REPORT every discrepancy
+  in self_check.discrepancies (do not silently "fix" the document).
+- If this is NOT a timesheet (invoice / cover email with no hours), set
+  is_timesheet=false, document_type accordingly, and leave entries [].
+"""
+
+
+def direct_extract_system(month: int, year: int) -> str:
+    return ("You are a meticulous timesheet data-extraction engine for a US "
+            "consulting company. You are given ONE employee's timesheet document "
+            "(PDF pages or an image) and must extract EVERY field a payroll app "
+            "needs, reading the whole document carefully. "
+            + _month_context(month, year) + DIRECT_MEGA_CONTRACT)

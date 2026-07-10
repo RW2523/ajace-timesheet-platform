@@ -79,6 +79,11 @@ def image_to_data_url(path: str | Path) -> str:
     return f"data:{mime};base64,{data}"
 
 
+def file_to_data_url(path: str | Path, mime: str = "application/pdf") -> str:
+    data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{data}"
+
+
 class OpenRouterClient:
     def __init__(self, settings: Optional[Settings] = None):
         self.s = settings or get_settings()
@@ -109,6 +114,24 @@ class OpenRouterClient:
                 "type": "image_url",
                 "image_url": {"url": image_to_data_url(ip)},
             })
+        return {"role": "user", "content": parts}
+
+    @staticmethod
+    def file_message(text: str, file_path: str | Path,
+                     images: Optional[list[str | Path]] = None) -> dict[str, Any]:
+        """A user turn carrying the WHOLE document natively: a PDF as a 'file'
+        part (OpenRouter/OpenAI native PDF input) and/or images as 'image_url'
+        parts. Used by the direct track so the model reads real pages, not text."""
+        parts: list[dict[str, Any]] = [{"type": "text", "text": text}]
+        if file_path is not None:
+            parts.append({
+                "type": "file",
+                "file": {"filename": Path(file_path).name,
+                         "file_data": file_to_data_url(file_path)},
+            })
+        for ip in (images or []):
+            parts.append({"type": "image_url",
+                          "image_url": {"url": image_to_data_url(ip)}})
         return {"role": "user", "content": parts}
 
     # -- core call ------------------------------------------------------------

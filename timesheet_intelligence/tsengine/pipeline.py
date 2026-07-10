@@ -97,6 +97,7 @@ class TimesheetPipeline:
         self.llm_norm = LLMNormalizer(self.router, self.s)
         self.registry = EmployeeRegistry(self.s)
         self.validator = Validator(self.s, self.router)
+        self._direct = None   # lazily created DirectExtractor (flow="direct")
 
     # ------------------------------------------------------------------ #
     def discover(self, folder: str | Path) -> list[Path]:
@@ -151,6 +152,7 @@ class TimesheetPipeline:
         report.llm_usage_by_model = usage["by_model"]
         employees = self.registry.build(all_results, month, year)
         for em in employees:
+            em.flow = self.s.flow
             self.validator.validate(em)
         # newest/most-complete first
         employees.sort(key=lambda e: (-(e.monthly_total or 0),
@@ -163,6 +165,8 @@ class TimesheetPipeline:
     def _agent_for(method: str) -> str:
         """Which internal sub-agent a NormResult's method string belongs to."""
         m = method or ""
+        if m.startswith("direct"):
+            return "DirectReader"
         if "vision" in m:
             return "VisionReader"
         if ":local/" in m or "local/" in m:
@@ -170,6 +174,30 @@ class TimesheetPipeline:
         if m.startswith("llm"):
             return "Normalizer:Cloud"
         return "Normalizer"
+
+    def _process_direct(self, path, rel, month, year, client_hint, det,
+                        report, act, done) -> "Optional[list[NormResult]]":
+        """flow='direct': one exhaustive model request per file, no parsing."""
+        from .direct.extractor import DirectExtractor
+        from .ingest.excel import _name_hint
+
+        if self._direct is None:
+            self._direct = DirectExtractor(self.router, self.s)
+        name_hint = None
+        try:
+            name_hint = _name_hint(Path(rel).stem)
+        except Exception:
+            pass
+        results = self._direct.extract(path, rel, month, year, client_hint,
+                                       name_hint, det.kind, act)
+        if not results:
+            report.unprocessed.append(UnprocessedFile(
+                file=rel, file_type=det.kind.value,
+                reason="direct extraction: not a timesheet or unreadable"))
+            done("DirectReader")
+            return None
+        done(self._agent_for(results[0].method))
+        return results
 
     def _process_one(self, path: Path, rel: str, month: int, year: int,
                      client_hint: Optional[str], report: ProcessingReport
@@ -190,6 +218,12 @@ class TimesheetPipeline:
 
         det = self.orch.detect(path)
         act("Classifier", "classified", f"{det.kind.value} ({det.reason})")
+
+        # DIRECT track: send the whole file to the model ladder, skip parsing.
+        if self.s.is_direct:
+            return self._process_direct(path, rel, month, year, client_hint,
+                                        det, report, act, done)
+
         raw = self.orch.extract(path, det)
         # restore folder-relative file label for nicer audit trails
         raw.file = rel

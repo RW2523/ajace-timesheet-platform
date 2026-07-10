@@ -51,7 +51,20 @@ class Settings(BaseSettings):
     # "premium": deterministic -> gpt-4o-mini -> selective gemini second opinion.
     # "budget":  deterministic -> FREE local LLM (Ollama) for text -> gpt-4o-mini
     #            fallback + vision; gemini hard-off. Near-zero cost, slower.
+    # "direct":  send the WHOLE file to a vision LLM with one exhaustive prompt,
+    #            per file, escalating nano -> mini -> gpt-5 on low confidence /
+    #            self-check failure. No deterministic parsing.
     flow: str = "premium"                    # TSE_FLOW
+
+    # ---- direct track (flow="direct") model ladder + gates ----
+    direct_primary_model: str = "openai/gpt-5.4-nano"
+    direct_fallback1_model: str = "openai/gpt-5.4-mini"
+    direct_fallback2_model: str = "openai/gpt-5"
+    direct_min_confidence: float = 0.75       # below -> escalate to next model
+    direct_autoaccept_confidence: float = 0.85  # at/above + no errors -> auto-accept
+    direct_agreement_tolerance: float = 2.0   # cross-model monthly-total agreement (h)
+    direct_max_pages: int = 20                # page cap per request
+
     use_local_llm: str = "auto"              # auto (= on in budget flow) | on | off
     local_llm_base_url: str = "http://localhost:11434"
     local_llm_model: str = "qwen2.5:7b-instruct"
@@ -71,6 +84,22 @@ class Settings(BaseSettings):
     @property
     def is_budget(self) -> bool:
         return self.flow.strip().lower() == "budget"
+
+    @property
+    def is_direct(self) -> bool:
+        return self.flow.strip().lower() == "direct"
+
+    @property
+    def direct_ladder(self) -> list[str]:
+        """Ordered model ladder for the direct track (dedup, drop blanks)."""
+        seen, out = set(), []
+        for m in (self.direct_primary_model, self.direct_fallback1_model,
+                  self.direct_fallback2_model):
+            m = (m or "").strip()
+            if m and m not in seen:
+                seen.add(m)
+                out.append(m)
+        return out
 
     @property
     def local_llm_enabled(self) -> bool:

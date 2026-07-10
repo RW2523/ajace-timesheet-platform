@@ -99,6 +99,7 @@ def health():
     s = get_settings()
     return {"ok": True, "llm_enabled": s.llm_enabled,
             "flow": s.flow,
+            "direct_ladder": s.direct_ladder,
             "local_llm": {
                 "enabled": s.local_llm_enabled,
                 "model": s.local_llm_model,
@@ -147,7 +148,7 @@ async def api_process_upload(
     if not (1 <= month <= 12):
         raise HTTPException(400, "month must be 1-12")
     s = get_settings()
-    if flow.strip().lower() in ("budget", "premium"):
+    if flow.strip().lower() in ("budget", "premium", "direct"):
         s = s.model_copy(update={"flow": flow.strip().lower()})
     name = Path(file.filename or "upload").name           # strip any path
     tmp = Path(tempfile.mkdtemp(prefix="ts_upload_"))
@@ -166,6 +167,7 @@ async def api_process_upload(
             "unprocessed": data.get("unprocessed", []),
             "llm_used": data.get("llm_used", False),
             "flow": data.get("flow", s.flow),
+            "review_status": (emps[0].get("review_status") if emps else None),
             "agent_trace": (data.get("agent_traces") or [None])[0],
             "stats": report.stats(),
             "file_name": name,

@@ -14,9 +14,22 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
   const pmap = useMemo(() => Object.fromEntries(profiles.map((p) => [p.id, p])), [profiles]);
   const [tab, setTab] = useState("submissions");
   const [detail, setDetail] = useState(null);
+  const [triage, setTriage] = useState("all");
 
   const totalHours = edits.reduce((a, e) => a + (e.fields?.totals?.total || 0), 0);
   const flagged = edits.filter((e) => (e.validation?.errors?.length || 0) > 0).length;
+
+  // Triage bucket for a submission: prefer the engine's review_status; fall back
+  // to the stored validation (older submissions predate review_status).
+  const reviewOf = (e) => {
+    const rs = e.fields?.review_status;
+    if (rs === "auto_accepted" || rs === "needs_review" || rs === "blocked") return rs;
+    return (e.validation?.errors?.length || 0) > 0 ? "blocked"
+      : (e.validation?.warnings?.length || 0) > 0 ? "needs_review" : "needs_review";
+  };
+  const counts = { auto_accepted: 0, needs_review: 0, blocked: 0 };
+  edits.forEach((e) => { counts[reviewOf(e)]++; });
+  const shownEdits = triage === "all" ? edits : edits.filter((e) => reviewOf(e) === triage);
 
   return (
     <>
@@ -46,12 +59,31 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
         </div>
 
         {tab === "submissions" && (
-          <Table headers={["Employee", "Client", "Period", "Regular", "OT", "Total", "Status", "Submitted", ""]}>
-            {edits.length === 0 && <Empty cols={9} text="No submissions yet." />}
-            {edits.map((e) => {
+          <>
+          <div className="row" style={{ gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            {[["all", "All", edits.length, "gray"],
+              ["blocked", "🔴 Blocked", counts.blocked, "red"],
+              ["needs_review", "🟡 Needs review", counts.needs_review, "amber"],
+              ["auto_accepted", "✅ Clean", counts.auto_accepted, "green"]].map(([k, label, n, color]) => (
+              <button key={k} onClick={() => setTriage(k)}
+                className="btn btn-sm"
+                style={{
+                  border: triage === k ? "2px solid var(--brand)" : "1px solid var(--line-strong)",
+                  background: triage === k ? "var(--brand-soft)" : "var(--surface)", color: "var(--txt)",
+                }}>
+                {label} <span className={"badge " + color} style={{ marginLeft: 4 }}>{n}</span>
+              </button>
+            ))}
+          </div>
+          <Table headers={["Employee", "Client", "Period", "Regular", "OT", "Total", "Triage", "Status", "Submitted", ""]}>
+            {shownEdits.length === 0 && <Empty cols={10} text="No submissions in this bucket." />}
+            {shownEdits.map((e) => {
               const p = pmap[e.user_id] || {};
               const t = e.fields?.totals || {};
               const errs = e.validation?.errors?.length || 0;
+              const rv = reviewOf(e);
+              const rvBadge = rv === "auto_accepted" ? ["green", "clean"]
+                : rv === "blocked" ? ["red", "blocked"] : ["amber", "review"];
               return (
                 <tr key={e.id}>
                   <td><b>{p.full_name || e.fields?.employee_name || "—"}</b><br /><span className="muted" style={{ fontSize: 12 }}>{p.email}</span></td>
@@ -60,6 +92,7 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
                   <td>{t.regular ?? "—"}</td>
                   <td>{t.overtime ?? "—"}</td>
                   <td><b>{t.total ?? "—"}</b></td>
+                  <td><span className={"badge " + rvBadge[0]}>{rvBadge[1]}</span></td>
                   <td>{errs > 0 ? <span className="badge red">{errs} error{errs > 1 ? "s" : ""}</span> : <span className="badge green">clean</span>}</td>
                   <td className="muted" style={{ fontSize: 12 }}>{fmt(e.created_at)}</td>
                   <td><button className="btn btn-ghost btn-sm" onClick={() => setDetail(e)}>Review</button></td>
@@ -67,6 +100,7 @@ export default function AdminClient({ profile, profiles, edits, timesheets, file
               );
             })}
           </Table>
+          </>
         )}
 
         {tab === "employees" && (
@@ -377,7 +411,8 @@ function FlowPicker({ supabase, adminId, initial }) {
   }
 
   const opts = [
-    { key: "premium", title: "⭐ Premium", desc: "Highest accuracy — GPT-4o-mini + Gemini second opinion on hard files. Uses paid AI credits." },
+    { key: "direct", title: "⚡ Direct", desc: "Most accurate — the whole file goes to GPT-5.4-nano with one exhaustive prompt, escalating to 5.4-mini / GPT-5 on hard docs. One request per file." },
+    { key: "premium", title: "⭐ Premium", desc: "Parse-first — GPT-4o-mini + Gemini second opinion on hard files. Uses paid AI credits." },
     { key: "budget", title: "💰 Budget", desc: "Near-zero cost — free local AI first (slower), cloud only as fallback. No Gemini." },
   ];
 

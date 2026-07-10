@@ -333,3 +333,56 @@ Every processed file gets a `FileTrace` in `report.agent_traces`: which agent
 (Classifier → Parser → OCR → Normalizer / Normalizer:Local / Normalizer:Cloud /
 VisionReader → Reconciler) acted, what it decided, and which model it used.
 `GET /api/health` reports the active flow + local-LLM availability.
+
+## Third flow: "direct" (v1.2) — whole-file to a vision model
+
+Set `TSE_FLOW=direct`. Instead of parsing, the WHOLE file is sent to a vision LLM
+with one exhaustive prompt (`prompts.DIRECT_MEGA_CONTRACT`) that asks for every
+field the app needs — identity, period, per-day hours (regular/OT/sick/vacation/
+holiday), weekly rows, stated totals, questionnaire prefills, per-field
+confidence, provenance, and a mandatory arithmetic self-check. One request per
+file; office files are converted to PDF first (the same `to_pdf` used by preview).
+
+Model ladder (config, not hardcode — `TSE_DIRECT_PRIMARY/_FALLBACK1/_FALLBACK2`):
+
+```
+openai/gpt-5.4-nano   (every file, cheap, 400k context)
+  ↓ escalate on: no data | confidence < 0.75 | implausible read (>23 days, >300h)
+openai/gpt-5.4-mini
+  ↓ escalate if still failing
+openai/gpt-5          (final read; best-so-far kept if it fails)
+```
+
+A self-check mismatch does NOT escalate (a genuine stated-vs-sum document
+discrepancy won't be fixed by a bigger model) — it routes the record to human
+review instead. When ≥2 models read a file and disagree on the month total by
+>2h, the record is auto-flagged CONFLICT.
+
+### Human-review routing (all flows)
+
+Every `EmployeeMonth` now carries `review_status`, computed by the validator:
+
+| status | when | admin action |
+|---|---|---|
+| `auto_accepted` | 0 errors, 0 conflicts, confidence ≥ 0.85 | none — shown as clean |
+| `needs_review` | any warning / confidence 0.6–0.85 | review queue |
+| `blocked` | errors, cross-model conflict, or confidence < 0.6 | must resolve |
+
+The admin console has a triage filter (All / Blocked / Needs review / Clean).
+
+### Extra "after extraction" checks (all flows)
+
+Beyond the existing per-day/-month checks, the validator now also flags: month
+total > 230h (over-read), `days_worked` > weekdays-in-month (impossible → error),
+and any overtime present (confirm approval).
+
+### Accuracy harness
+
+`scripts/eval_flows.py` scores any flow(s) against `tests/golden_set.json`
+(invoice-confirmed + audited April/May totals): exact-total rate, within-2h rate,
+days accuracy, cost, and time. The direct track ships as default only if it beats
+premium on exact-total rate at acceptable cost:
+
+```
+TSE_OPENROUTER_API_KEY=... python scripts/eval_flows.py direct premium budget
+```
