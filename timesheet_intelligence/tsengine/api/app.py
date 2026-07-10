@@ -148,7 +148,7 @@ async def api_process_upload(
     if not (1 <= month <= 12):
         raise HTTPException(400, "month must be 1-12")
     s = get_settings()
-    if flow.strip().lower() in ("budget", "premium", "direct"):
+    if flow.strip().lower() in ("budget", "premium", "direct", "premium_plus"):
         s = s.model_copy(update={"flow": flow.strip().lower()})
     name = Path(file.filename or "upload").name           # strip any path
     tmp = Path(tempfile.mkdtemp(prefix="ts_upload_"))

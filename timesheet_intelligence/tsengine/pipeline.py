@@ -279,8 +279,59 @@ class TimesheetPipeline:
                                 f"kept {better.method}: {t}h/{w}d",
                                 model=self.s.second_opinion_model)
                         results[i] = better
+
+        # PREMIUM PLUS: the Claude-baseline technique on existing models. When a
+        # scan/photo came out UNDER-READ (OCR/deterministic missed most of it), do
+        # a full-IMAGE vision re-read with the exhaustive prompt on the strong
+        # existing model (gemini) and keep it if it's more plausible. This is what
+        # recovers cases like Rajani (3h -> 176h) that plain premium under-reads.
+        if self.s.is_premium_plus and raw.images and self.llm_norm.enabled:
+            for i, res in enumerate(results):
+                w, t = self._worked_total(res)
+                under = (t <= 0
+                         or (t < self.s.premium_plus_min_hours
+                             and w < self.s.premium_plus_min_days)
+                         or res.needs_llm or res.confidence < 0.5)
+                if under:
+                    better = self._premium_plus_vision(
+                        path, rel, month, year, client_hint, det, res, act)
+                    if better is not None:
+                        results[i] = better
+
         done(self._agent_for(results[0].method) if results else "Normalizer")
         return results
+
+    def _premium_plus_vision(self, path, rel, month, year, client_hint, det,
+                             current, act):
+        """Full-image vision re-read of an under-read scan, using the exhaustive
+        prompt on the strong existing model. Keeps it only if more plausible."""
+        from .direct.extractor import DirectExtractor
+        from .ingest.excel import _name_hint
+        if self._direct is None:
+            self._direct = DirectExtractor(self.router, self.s)
+        try:
+            nh = _name_hint(Path(rel).stem)
+        except Exception:
+            nh = None
+        try:
+            out = self._direct.extract(path, rel, month, year, client_hint, nh,
+                                       det.kind, act,
+                                       ladder=self.s.premium_plus_vision_ladder)
+        except Exception as exc:
+            log.warning("premium-plus vision failed for %s: %s", rel, exc)
+            return None
+        if not out:
+            return None
+        cand = out[0]
+        cw, ct = self._worked_total(cand)
+        ow, ot = self._worked_total(current)
+        if ct > ot and cw <= 24 and ct <= 300:          # more plausible read wins
+            cand.notes.append(
+                f"premium-plus vision re-read: {ot:g}h/{ow}d -> {ct:g}h/{cw}d")
+            act("VisionReader", "second_opinion",
+                f"under-read {ot:g}h -> {ct:g}h", model=cand.method.split(":", 1)[-1])
+            return cand
+        return current
 
     def _should_escalate(self, res: NormResult) -> bool:
         if not self.llm_norm.enabled:

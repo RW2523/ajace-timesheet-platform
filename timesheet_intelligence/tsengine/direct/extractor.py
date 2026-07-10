@@ -109,7 +109,8 @@ class DirectExtractor:
     # -- main ----------------------------------------------------------------
     def extract(self, path: Path, rel: str, month: int, year: int,
                 client_hint: Optional[str], name_hint: Optional[str],
-                kind: FileKind, act: Optional[Callable] = None
+                kind: FileKind, act: Optional[Callable] = None,
+                ladder: Optional[list[str]] = None
                 ) -> Optional[list[NormResult]]:
         act = act or (lambda *a, **k: None)
         path = Path(path)
@@ -124,7 +125,7 @@ class DirectExtractor:
         best: Optional[NormResult] = None
         best_data: dict = {}
         totals_seen: list[float] = []
-        ladder = self.s.direct_ladder
+        ladder = ladder or self.s.direct_ladder
 
         for i, model in enumerate(ladder):
             data = self._call(model, system, pdf, images)

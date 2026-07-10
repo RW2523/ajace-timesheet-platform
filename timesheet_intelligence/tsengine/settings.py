@@ -54,7 +54,21 @@ class Settings(BaseSettings):
     # "direct":  send the WHOLE file to a vision LLM with one exhaustive prompt,
     #            per file, escalating nano -> mini -> gpt-5 on low confidence /
     #            self-check failure. No deterministic parsing.
+    # "premium_plus": premium, PLUS the Claude-baseline technique -- when a
+    #            scan/photo is under-read, do a full-image vision re-read with the
+    #            exhaustive prompt on the existing gemini model and keep the better
+    #            read. Same models as premium; recovers OCR under-reads (e.g. Rajani).
     flow: str = "premium"                    # TSE_FLOW
+
+    # premium_plus: full-image vision re-read ladder (cheap gpt vision first,
+    # escalate if it still under-reads) + trigger for under-read scans.
+    premium_plus_vision_models: str = "openai/gpt-4o-mini,openai/gpt-5.4-mini"
+    premium_plus_min_hours: float = 60.0      # below this on a scan -> vision re-read
+    premium_plus_min_days: int = 6
+
+    @property
+    def premium_plus_vision_ladder(self) -> list[str]:
+        return [m.strip() for m in self.premium_plus_vision_models.split(",") if m.strip()]
 
     # ---- direct track (flow="direct") model ladder + gates ----
     direct_primary_model: str = "openai/gpt-5.4-nano"
@@ -88,6 +102,10 @@ class Settings(BaseSettings):
     @property
     def is_direct(self) -> bool:
         return self.flow.strip().lower() == "direct"
+
+    @property
+    def is_premium_plus(self) -> bool:
+        return self.flow.strip().lower() == "premium_plus"
 
     @property
     def direct_ladder(self) -> list[str]:

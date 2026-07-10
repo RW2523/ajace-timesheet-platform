@@ -245,26 +245,54 @@ null / [] when a datum is genuinely absent -- never omit a key, never guess.
 }
 
 RULES (follow ALL -- these mirror how a careful human reads a timesheet):
-- employee_name is the PERSON whose time this is. NEVER a company, address, city,
-  project, or the APPROVER/MANAGER. If no person name is visible, null.
+
+IDENTITY
+- employee_name is the PERSON whose time this is (a human name). NEVER a company,
+  client, address, city, PROJECT, or a SOFTWARE/TOOL name (e.g. "Clarity PPM",
+  "Workday", "SAP"), and NEVER the APPROVER/MANAGER. Look near "Employee", "Name",
+  "Consultant", "Contractor", or a signature. If truly none, null.
+
+DO NOT WRONGLY REJECT (important)
+- A faint, low-contrast, handwritten, or hard-to-read SCAN/PHOTO is STILL a
+  timesheet. Read whatever hours you can see. Only set is_timesheet=false for a
+  genuine INVOICE/BILL (line items, $ amounts, "Invoice #", "Bill To") or a plain
+  email/cover page with NO hours grid at all. When unsure but you can see any
+  dated hours or an hours grid -> is_timesheet=true and extract.
+- WEEKLY-RANGE grids ARE timesheets: rows like "Week 1 | 01-May | 07-May | 40"
+  (a start date, an end date, and that week's hours). Put each in weekly_totals
+  (or expand to days if daily hours are shown). Do NOT reject these as "not a
+  timesheet" just because there is no day-by-day grid.
+- An APPROVAL email/page that states a month total (e.g. "Approved 160 hours for
+  May") with no grid: set stated_total to that number and is_timesheet=true.
+
+READING
 - READ EVERY WEEK / EVERY PAGE / THE WHOLE CALENDAR. Timesheets often stack
   several weekly grids (one per page). Emit an entry for EVERY dated day with
   hours across ALL of them; do not stop after the first week.
 - Use the EXACT dates printed. Include a date ONLY if it is actually shown with
   hours. Do NOT invent, extrapolate, or fill days/weeks that are not present.
-- Blank/empty/illegible cell = null (add an ambiguity note). 0 = 0. NEVER a
-  guessed 8. Weekends are NOT assumed worked -- a blank weekend is null/0.
-- If the document's dates are for a DIFFERENT month than the target, return an
-  empty entries list -- never shift dates into the target month.
+- Blank/empty/illegible cell = null. 0 = 0. NEVER a guessed 8. Weekends are NOT
+  assumed worked -- a blank Sat/Sun is null/0.
 - PROJECT MATRICES (rows = projects, columns = weekdays): each date's total is
   the SUM across ALL project rows for that date. Go through every row.
-- Separate overtime from regular ONLY when the source explicitly distinguishes
-  them; otherwise put everything in total_hours.
+
+COUNT DAYS ONCE (avoid over-reads)
+- Each calendar date appears EXACTLY ONCE in entries. Never emit the same date
+  twice, even if it shows on two pages. A month has ~20-23 weekdays; if your
+  days_worked exceeds 23 or your total exceeds ~230h, you almost certainly
+  DOUBLE-COUNTED a week/page -- re-check and de-duplicate before answering.
+
+HOURS TYPES
+- If the sheet separates REGULAR/BILLABLE from SICK/VACATION/HOLIDAY, put each in
+  its field; total_hours = the sum actually worked+paid for that day. Report the
+  full monthly total; if a "billable only" number also exists, note it in
+  ambiguities. Separate overtime from regular ONLY when the source explicitly
+  distinguishes them; otherwise put everything in total_hours.
+
+SELF-CHECK
 - COMPUTE self_check for real: add the daily totals, compare to any printed
   total, verify each day's regular+overtime==total, and REPORT every discrepancy
   in self_check.discrepancies (do not silently "fix" the document).
-- If this is NOT a timesheet (invoice / cover email with no hours), set
-  is_timesheet=false, document_type accordingly, and leave entries [].
 """
 
 

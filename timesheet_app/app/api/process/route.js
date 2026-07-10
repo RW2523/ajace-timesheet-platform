@@ -33,7 +33,7 @@ export async function POST(request) {
   try {
     const { data: fs } = await supabase
       .from("ts_app_settings").select("value").eq("key", "ai_flow").single();
-    if (["direct", "budget", "premium"].includes(fs?.value)) flow = fs.value;
+    if (["direct","premium_plus","budget","premium"].includes(fs?.value)) flow = fs.value;
   } catch { /* keep default */ }
 
   try {
