@@ -85,10 +85,10 @@ class Settings(BaseSettings):
     consensus_ceiling_h: float = 230.0        # above this never auto-accepts
     # cross-family tiebreak ladder (S5/S6). Reserved: not yet wired into the gate
     # -- disagreements route to review today -- but configurable for when the
-    # escalation phase lands (gemini decorrelates from the GPT Key B; then gpt-5;
-    # then a hard-capped opus arbiter).
+    # escalation phase lands (gemini decorrelates from the GPT Key B, then gpt-5
+    # as the final arbiter). NO Claude/Opus tier: it is deliberately excluded on
+    # cost grounds -- the engine never calls an Anthropic model.
     consensus_tiebreak_models: str = "google/gemini-2.5-pro,openai/gpt-5"
-    opus_budget_per_run: int = 4              # hard cap on claude-opus arbiter calls per batch
 
     @property
     def consensus_tiebreak_ladder(self) -> list[str]:
