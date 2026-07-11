@@ -327,13 +327,33 @@ SELF-CHECK
   in self_check.discrepancies (do not silently "fix" the document).
 
 RECONCILE (the number the app trusts)
-- The authoritative monthly figure is the SUM of your in-month daily entries, so
-  make the entries correct and COMPLETE -- read every page/week before you answer.
-  stated_total is the sheet's OWN printed number, kept only for cross-check: if it
-  differs from your daily sum, keep BOTH and explain the gap in
-  self_check.discrepancies. NEVER pad, invent, or drop days to force a match, and
-  never copy a printed total into the daily entries.
+- The engine computes the monthly total FROM YOUR PER-DAY ENTRIES, in code. You
+  are the reader, not the calculator: make the entries correct and COMPLETE --
+  read every page/week before you answer -- and let the engine do the adding.
+- When a daily grid exists, emit ONLY entries (weekly_totals stays []); use
+  weekly_totals ONLY when the source gives nothing but weekly numbers.
+- stated_total is the sheet's OWN printed number, kept only for cross-check: if
+  it differs from your daily sum, keep BOTH and explain the gap in
+  self_check.discrepancies. NEVER pad, invent, or drop days to force a match,
+  and never copy a printed total into the daily entries.
 """
+
+
+def direct_repair_message(code_sum: float, code_days: int,
+                          claimed_sum: Any, stated: Any) -> str:
+    """One-shot arithmetic-repair turn: the CODE summed the model's own entries
+    and got a different number than the model claimed -- an internal reading
+    slip (a mistyped cell, a duplicated or dropped day). Names only computed
+    facts; never suggests a target value."""
+    claimed = "not given" if claimed_sum is None else f"{claimed_sum}"
+    printed = "none printed" if stated is None else f"{stated}"
+    return (
+        f"CHECK: code summed the daily entries you returned: {code_sum:g}h over "
+        f"{code_days} worked day(s). Your self_check claimed {claimed} and the "
+        f"sheet's printed total is {printed}. These do not reconcile, which means "
+        f"at least one entry is misread, duplicated, or missing. Re-read the "
+        f"document carefully and return the FULL corrected JSON (same shape). "
+        f"Fix only what the document actually shows -- do not force any total.")
 
 
 # --------------------------------------------------------------------------- #

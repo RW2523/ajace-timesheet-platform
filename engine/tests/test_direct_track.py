@@ -189,7 +189,7 @@ def test_direct_verify_confirms_on_agreement():
     ext, s = _extractor(
         {"openai/gpt-5.4-nano": _mega(total_days=17, conf=0.8),
          "verify-model": {"monthly_total": 136, "days_worked": 17, "confidence": 0.9}},
-        direct_verify=True, direct_verify_model="verify-model")
+        direct_verify=True, direct_verify_mode="always", direct_verify_model="verify-model")
     r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
     assert r.verification == "confirmed"
     assert r.confidence >= 0.9
@@ -201,7 +201,7 @@ def test_direct_verify_flags_on_disagreement():
     ext, s = _extractor(
         {"openai/gpt-5.4-nano": _mega(total_days=17, conf=0.9),
          "verify-model": {"monthly_total": 96, "days_worked": 12, "confidence": 0.8}},
-        direct_verify=True, direct_verify_model="verify-model")
+        direct_verify=True, direct_verify_mode="always", direct_verify_model="verify-model")
     r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
     assert r.verification != "confirmed"
     assert r.confidence <= 0.6                                 # -> needs_review
@@ -212,3 +212,113 @@ def test_direct_verify_off_makes_no_extra_call():
     ext, s = _extractor({"openai/gpt-5.4-nano": _mega(conf=0.9)}, direct_verify=False)
     ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
     assert ext.router.client.calls == ["openai/gpt-5.4-nano"]  # no verify call
+
+
+# --- Direct++ phases: dedupe / repair / gate / budget / scheduling --------- #
+def test_dedupe_repeated_dates_counted_once():
+    # the same date emitted twice (a re-shown page) collapses to one entry
+    m = _mega(total_days=5)
+    m["entries"] = m["entries"] + [dict(m["entries"][0])]      # duplicate day 1
+    m["self_check"]["sum_of_daily_totals"] = 40.0              # consistent claim
+    m["stated_total"] = 40.0
+    ext, s = _extractor({"*": m})
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert sum(e.total for e in r.entries) == 40.0             # not 48
+    assert any("deduped" in n for n in r.notes)
+
+
+def test_repair_triggers_on_internal_mismatch():
+    # model's entries sum to 136 but it CLAIMS 160 -> one repair round; the
+    # corrected JSON (20 days, consistent) is adopted.
+    bad = _mega(total_days=17)
+    bad["self_check"]["sum_of_daily_totals"] = 160.0           # slip: claims 160
+    bad["stated_total"] = 160.0
+    good = _mega(total_days=20, conf=0.9)                      # corrected read
+    calls = {"n": 0}
+
+    class _Seq(_FakeClient):
+        def chat(self, model, messages, **kw):
+            calls["n"] += 1
+            import json
+            data = bad if calls["n"] == 1 else good
+            self.calls.append(model)
+            return ChatResponse(text=json.dumps(data), model=model, raw={},
+                                usage={"total_tokens": 100, "cost": 0.001})
+
+    ext = DirectExtractor(_FakeRouter(_Seq({})),
+                          Settings(flow="direct", direct_verify=False))
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert sum(e.total for e in r.entries) == 160.0            # corrected
+    assert any("arithmetic repair" in n for n in r.notes)
+    assert calls["n"] == 2                                     # exactly one extra call
+
+
+def test_no_repair_when_claims_consistent():
+    ext, s = _extractor({"*": _mega(conf=0.9)})                # claims == code sum
+    ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
+    assert ext.router.client.calls == ["openai/gpt-5.4-nano"]  # single call
+
+
+def test_sparse_read_escalates_without_printed_total():
+    sparse = _mega(total_days=3)                               # 24h grid
+    sparse["stated_total"] = None
+    sparse["self_check"]["sum_of_daily_totals"] = 24.0
+    full = _mega(total_days=20, conf=0.9)
+    ext, s = _extractor({"openai/gpt-5.4-nano": sparse,
+                         "openai/gpt-5.4-mini": full})
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.method == "direct:openai/gpt-5.4-mini"            # climbed on sparsity
+
+
+def test_sparse_with_printed_total_is_accepted():
+    # a true part-time month (sheet prints 24h) must NOT burn escalation
+    sparse = _mega(total_days=3)
+    sparse["stated_total"] = 24.0
+    sparse["self_check"]["sum_of_daily_totals"] = 24.0
+    ext, s = _extractor({"*": sparse})
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert ext.router.client.calls == ["openai/gpt-5.4-nano"]
+
+
+def test_strong_model_budget_caps_gpt5():
+    low = _mega(conf=0.4)                                      # every rung rejects
+    ext, s = _extractor({"*": low}, direct_strong_budget=1)
+    # file 1 burns the single gpt-5 slot; file 2 must not call gpt-5
+    ext.extract("a.pdf", "a.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
+    n_gpt5_first = ext.router.client.calls.count("openai/gpt-5")
+    ext.extract("b.pdf", "b.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
+    n_gpt5_total = ext.router.client.calls.count("openai/gpt-5")
+    assert n_gpt5_first == 1 and n_gpt5_total == 1             # capped
+
+
+def test_auto_verify_skips_clean_confident_read():
+    ext, s = _extractor({"*": _mega(conf=0.95)},
+                        direct_verify=True, direct_verify_mode="auto")
+    ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
+    assert ext.router.client.calls == ["openai/gpt-5.4-nano"]  # no verify spent
+
+
+def test_auto_verify_runs_on_low_confidence():
+    ext, s = _extractor(
+        {"openai/gpt-5.4-nano": _mega(conf=0.8),
+         "verify-model": {"monthly_total": 136, "days_worked": 17, "confidence": 0.9}},
+        direct_verify=True, direct_verify_mode="auto",
+        direct_verify_model="verify-model")
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert "verify-model" in ext.router.client.calls
+    assert r.verification == "confirmed"
+
+
+def test_eml_input_carries_body_text(tmp_path):
+    # an approval email: the body text (with the weekly table) must reach the model
+    from email.message import EmailMessage
+    m = EmailMessage()
+    m["Subject"] = "Timesheet approval request for May 2026"
+    m["From"] = "a@b.com"
+    m.set_content("Approved 160 Hours for May for Raviraj\nTotal Hours 160")
+    p = tmp_path / "fw.eml"
+    p.write_bytes(m.as_bytes())
+    ext, s = _extractor({})
+    pdf, images, text = ext._as_model_input(p)
+    assert pdf is None and images == []
+    assert "Approved 160 Hours" in text and "Subject:" in text

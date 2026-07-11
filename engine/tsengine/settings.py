@@ -127,6 +127,20 @@ class Settings(BaseSettings):
     # decorrelated option; set to google/gemini-2.5-pro for maximum decorrelation.
     direct_verify: bool = True
     direct_verify_model: str = "openai/gpt-5.4-mini"
+    # verify scheduling: "auto" spends the verify call only on GRAY-ZONE reads
+    # (low confidence / scan input / a repair happened / sparse), "always" on
+    # every read, "off" never. Auto keeps a typical batch well under budget.
+    direct_verify_mode: str = "auto"
+    # arithmetic repair loop: when the model's own claimed totals disagree with
+    # the CODE-computed sum of its entries (an internal reading slip), send ONE
+    # follow-up naming the code-computed facts and take the corrected JSON.
+    direct_repair: bool = True
+    # per-batch cap on the strongest (gpt-5) rung -- an extractor instance stops
+    # escalating to it after this many uses (falls back to the best cheap read).
+    direct_strong_budget: int = 6
+    # lightly enhance images before sending (2x upscale of small scans +
+    # autocontrast); big win on faint screenshots, costs nothing.
+    direct_preprocess_images: bool = True
 
     use_local_llm: str = "auto"              # auto (= on in budget flow) | on | off
     local_llm_base_url: str = "http://localhost:11434"
