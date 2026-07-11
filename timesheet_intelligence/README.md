@@ -379,6 +379,35 @@ so its extraction can't be biased by one. The per-file instruction is a fixed,
 number-free string and the system prompt is a pure function of `(month, year)` —
 locked in by a regression test.
 
+### Consensus flow (`TSE_FLOW=consensus`): two keys must agree
+
+The consensus flow requires **two independent agreeing derivations** before a
+number auto-accepts (`pipeline.py:_process_consensus`):
+
+1. **Key A** — the hardened deterministic read (all of steps 1–3).
+2. **`$0` verified exit** — if Key A is vote-valid and its in-month **daily sum
+   equals the sheet's own printed total** (±0.5h) in a sane month, the document's
+   internal arithmetic *is* the second derivation → auto-accept **with no model
+   call**. Clean files cost nothing. (`_printed_total_confirms`)
+3. **Key B** — a blind whole-file model read (`gpt-5.4-nano → mini`), run only
+   when the `$0` exit doesn't fire.
+4. **Consensus gate** (`_consensus_gate`) — auto-accept (confidence 0.9) only when
+   Key A and Key B agree within 2h **and all four locks pass**:
+   - **ceiling** — never auto-accept above 230h;
+   - **ratio veto** — a candidate under 60% of the other can't win (and on
+     disagreement the higher read is kept);
+   - **low-total lock** — an agreed total under 60h needs day-level evidence in
+     *both* keys, not a lone stated cell;
+   - **vision-only cap** — if neither key has month-scale evidence, it's not a
+     confirmation → review.
+   Disagreement or a lock trip keeps the better-supported read at low confidence →
+   **needs_review** (the cross-family tiebreak ladder is a later step).
+
+The read is blind by construction — Key B never sees Key A's number. Enable per
+upload via the admin AI-flow setting (`ai_flow=consensus`); it is not yet the
+default. The gate and `$0` exit are pure decision logic, unit-tested without any
+model call.
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

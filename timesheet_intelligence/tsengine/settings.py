@@ -70,6 +70,30 @@ class Settings(BaseSettings):
     def premium_plus_vision_ladder(self) -> list[str]:
         return [m.strip() for m in self.premium_plus_vision_models.split(",") if m.strip()]
 
+    # ---- consensus track (flow="consensus") ----
+    # Two independent derivations must agree before a number auto-accepts:
+    #   Key A = the hardened deterministic read; Key B = a blind whole-file model
+    #   read. A clean file whose deterministic sum matches its own printed total
+    #   exits at $0 (no model call). Otherwise Key B runs and the consensus gate +
+    #   four locks decide. Disagreement routes to review (the tiebreak ladder is a
+    #   later step).
+    consensus_key_b_models: str = "openai/gpt-5.4-nano,openai/gpt-5.4-mini"
+    consensus_agree_tolerance: float = 2.0    # |Key A - Key B| <= this -> agree (h)
+    consensus_printed_match_h: float = 0.5    # deterministic sum == printed total (h)
+    consensus_low_total_h: float = 60.0       # below this needs day-level evidence in BOTH keys
+    consensus_ratio_veto: float = 0.6         # a candidate < this * another can't win
+    consensus_ceiling_h: float = 230.0        # above this never auto-accepts
+
+    @property
+    def consensus_key_b_ladder(self) -> list[str]:
+        seen, out = set(), []
+        for m in self.consensus_key_b_models.split(","):
+            m = m.strip()
+            if m and m not in seen:
+                seen.add(m)
+                out.append(m)
+        return out
+
     # ---- direct track (flow="direct") model ladder + gates ----
     direct_primary_model: str = "openai/gpt-5.4-nano"
     direct_fallback1_model: str = "openai/gpt-5.4-mini"
@@ -106,6 +130,10 @@ class Settings(BaseSettings):
     @property
     def is_premium_plus(self) -> bool:
         return self.flow.strip().lower() == "premium_plus"
+
+    @property
+    def is_consensus(self) -> bool:
+        return self.flow.strip().lower() == "consensus"
 
     @property
     def direct_ladder(self) -> list[str]:

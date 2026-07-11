@@ -23,7 +23,8 @@ from .aggregate.registry import EmployeeRegistry
 from .llm.router import ModelRouter
 from .normalize import dates as D
 from .normalize.llm_normalizer import LLMNormalizer
-from .normalize.normalizer import NormResult, Normalizer
+from .normalize.normalizer import (NormResult, Normalizer,
+                                   _has_month_scale_evidence)
 from .orchestrator import Orchestrator
 from .schema import (ENGINE_VERSION, AgentAction, ExtractionQuality, FileTrace,
                      ProcessingReport, UnprocessedFile)
@@ -211,6 +212,168 @@ class TimesheetPipeline:
         done(self._agent_for(results[0].method))
         return results
 
+    # ------------------------------------------------------------------ #
+    def _process_consensus(self, path, rel, month, year, client_hint, det,
+                           report, act, done) -> "Optional[list[NormResult]]":
+        """flow='consensus': require two independent agreeing derivations.
+
+        Key A = the hardened deterministic read (steps 1-3). Key B = a blind
+        whole-file model read. A file whose deterministic sum equals its own
+        printed total exits at $0 (no model call). Otherwise Key B runs and the
+        consensus gate + four locks decide; disagreement routes to review.
+        """
+        raw = self.orch.extract(path, det)
+        raw.file = rel
+        act("Parser", "extracted",
+            f"{len(raw.tables)} table(s), {len(raw.text)} chars, {len(raw.images)} image(s)")
+        if raw.quality == ExtractionQuality.EMPTY and not raw.text and not raw.tables \
+                and not raw.images:
+            report.unprocessed.append(UnprocessedFile(
+                file=rel, file_type=det.kind.value,
+                reason="; ".join(raw.notes) or "nothing extractable"))
+            act("Parser", "rejected", "nothing extractable", ok=False)
+            done("Parser")
+            return None
+        if _looks_like_invoice(raw.text, rel):
+            report.unprocessed.append(UnprocessedFile(
+                file=rel, file_type=det.kind.value,
+                reason="appears to be an invoice / billing document, not a timesheet"))
+            act("Classifier", "rejected", "invoice/billing document, not a timesheet")
+            done("Classifier")
+            return None
+
+        # KEY A: hardened deterministic read
+        a_results = self.normalizer.normalize(raw, month, year, client_hint)
+        self._resolve_period(rel, raw, a_results, month, year, act)
+        key_a = a_results[0] if a_results else None
+        if key_a is not None:
+            aw, at = self._worked_total(key_a)
+            act("Consensus", "key_a",
+                f"{key_a.method}: {at:g}h/{aw}d conf {key_a.confidence:.2f}")
+
+        # S2: $0 verified exit -- deterministic sum == the sheet's own printed total
+        if key_a is not None and self._printed_total_confirms(key_a, month, year):
+            key_a.confidence = max(key_a.confidence, 0.9)
+            key_a.needs_llm = False
+            key_a.notes.append(
+                f"consensus $0 exit: deterministic sum matches the sheet's printed "
+                f"total ({key_a.stated_total:g}h)")
+            act("Consensus", "confirmed",
+                f"printed-total match ({key_a.stated_total:g}h); no model call")
+            done(self._agent_for(key_a.method))
+            return a_results
+
+        # KEY B: blind whole-file model read (independent of Key A)
+        key_b = None
+        if self.llm_norm.enabled:
+            if self._direct is None:
+                from .direct.extractor import DirectExtractor
+                self._direct = DirectExtractor(self.router, self.s)
+            from .ingest.excel import _name_hint
+            try:
+                nh = _name_hint(Path(rel).stem)
+            except Exception:
+                nh = None
+            try:
+                b_results = self._direct.extract(
+                    path, rel, month, year, client_hint, nh, det.kind, act,
+                    ladder=self.s.consensus_key_b_ladder)
+            except Exception as exc:
+                log.warning("consensus key B failed for %s: %s", rel, exc)
+                b_results = None
+            key_b = b_results[0] if b_results else None
+            if key_b is not None:
+                bw, bt = self._worked_total(key_b)
+                act("Consensus", "key_b",
+                    f"{key_b.method}: {bt:g}h/{bw}d conf {key_b.confidence:.2f}")
+
+        chosen = self._consensus_gate(key_a, key_b, month, year, act)
+        if chosen is None:
+            report.unprocessed.append(UnprocessedFile(
+                file=rel, file_type=det.kind.value,
+                reason="consensus: no usable deterministic or model read"))
+            done("Consensus")
+            return None
+        if key_a is not None and key_a.period_mismatch and not chosen.period_mismatch:
+            chosen.period_mismatch = key_a.period_mismatch
+        done(self._agent_for(chosen.method))
+        return [chosen]
+
+    def _printed_total_confirms(self, res: NormResult, month: int, year: int) -> bool:
+        """The document's own arithmetic is a genuine second derivation: a
+        vote-valid DAILY read whose in-month sum equals the sheet's printed total,
+        landing in a sane month. Lets a clean file auto-accept at $0."""
+        st = res.stated_total
+        if st is None:
+            return False
+        if not _has_month_scale_evidence(res, month, year, self.s.weekend_set):
+            return False
+        daily = sum((e.total or e.regular or e.overtime or 0.0) for e in res.entries)
+        if daily <= 0:                                   # need real per-day evidence
+            return False
+        if abs(daily - float(st)) > self.s.consensus_printed_match_h:
+            return False
+        worked, _ = self._worked_total(res)
+        return 8 <= float(st) <= self.s.consensus_ceiling_h and worked <= 23
+
+    def _consensus_gate(self, key_a, key_b, month, year, act):
+        """Decide from two derivations. Auto-accept only when they AGREE and all
+        four locks pass; otherwise keep the better-supported read for review."""
+        def usable(r):
+            return bool(r is not None and (r.entries or r.weekly_totals
+                                           or r.stated_total is not None))
+        def evid(r):
+            return r is not None and _has_month_scale_evidence(
+                r, month, year, self.s.weekend_set)
+        a_ok, b_ok = usable(key_a), usable(key_b)
+        if not a_ok and not b_ok:
+            return None
+        # only one derivation -> keep it, but it is unconfirmed -> review
+        if a_ok != b_ok:
+            one = key_a if a_ok else key_b
+            one.confidence = min(one.confidence, 0.7)
+            one.notes.append("consensus: only one derivation available; unconfirmed")
+            act("Consensus", "single",
+                f"one derivation only ({self._worked_total(one)[1]:g}h)", ok=False)
+            return one
+
+        aw, at = self._worked_total(key_a)
+        bw, bt = self._worked_total(key_b)
+        hi, lo = max(at, bt), min(at, bt)
+        agree = abs(at - bt) <= self.s.consensus_agree_tolerance
+        # LOCKS
+        ratio_ok = hi <= 0 or lo >= self.s.consensus_ratio_veto * hi
+        ceiling_ok = 8 < hi <= self.s.consensus_ceiling_h
+        low_total_ok = (hi >= self.s.consensus_low_total_h) or (aw > 0 and bw > 0)
+        vision_only = (not evid(key_a)) and (not evid(key_b))
+        # carrier = the richer read (more day detail); prefer deterministic on a tie
+        richer = key_a if len(key_a.entries) >= len(key_b.entries) else key_b
+
+        if agree and ratio_ok and ceiling_ok and low_total_ok and not vision_only:
+            richer.confidence = max(richer.confidence, 0.9)
+            richer.needs_llm = False
+            richer.notes.append(
+                f"consensus CONFIRMED: Key A {at:g}h and Key B {bt:g}h agree "
+                f"(<= {self.s.consensus_agree_tolerance:g}h)")
+            act("Consensus", "confirmed", f"A {at:g}h == B {bt:g}h")
+            return richer
+
+        # disagreement / lock trip -> keep the better-supported read for review.
+        # when the ratio veto fires, the higher read is far likelier correct.
+        if not ratio_ok:
+            chosen = key_a if at >= bt else key_b
+        elif evid(key_a) and not evid(key_b):
+            chosen = key_a
+        elif evid(key_b) and not evid(key_a):
+            chosen = key_b
+        else:
+            chosen = richer
+        chosen.confidence = min(chosen.confidence, 0.65)      # -> needs_review
+        chosen.notes.append(
+            f"consensus DISAGREEMENT: Key A {at:g}h vs Key B {bt:g}h; needs review")
+        act("Consensus", "disagree", f"A {at:g}h vs B {bt:g}h", ok=False)
+        return chosen
+
     def _process_one(self, path: Path, rel: str, month: int, year: int,
                      client_hint: Optional[str], report: ProcessingReport
                      ) -> Optional[list[NormResult]]:
@@ -235,6 +398,12 @@ class TimesheetPipeline:
         if self.s.is_direct:
             return self._process_direct(path, rel, month, year, client_hint,
                                         det, report, act, done)
+
+        # CONSENSUS track: two independent derivations (deterministic + blind
+        # model read) must agree before a number auto-accepts.
+        if self.s.is_consensus:
+            return self._process_consensus(path, rel, month, year, client_hint,
+                                           det, report, act, done)
 
         raw = self.orch.extract(path, det)
         # restore folder-relative file label for nicer audit trails
