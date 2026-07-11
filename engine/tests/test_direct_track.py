@@ -59,6 +59,9 @@ class _FakeRouter:
 
 
 def _extractor(by_model, **over):
+    # ladder tests assert exact call sequences; the blind verify pass adds a call,
+    # so it is OFF here unless a test opts in (the verify tests below set it True).
+    over.setdefault("direct_verify", False)
     s = Settings(flow="direct", **over)
     return DirectExtractor(_FakeRouter(_FakeClient(by_model)), s), s
 
@@ -169,7 +172,7 @@ def test_direct_read_is_blind_of_any_candidate():
             return super().chat(model, messages, **kw)
 
     ext = DirectExtractor(_FakeRouter(_Rec({"*": _mega(conf=0.9)})),
-                          Settings(flow="direct"))
+                          Settings(flow="direct", direct_verify=False))
     ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
     msgs = captured["messages"]
     user = [m for m in msgs if m["role"] == "user"][0]
@@ -178,3 +181,34 @@ def test_direct_read_is_blind_of_any_candidate():
     # the system prompt depends only on month/year, not on any prior read
     from tsengine.llm.prompts import direct_extract_system
     assert msgs[0]["content"] == direct_extract_system(4, 2026)
+
+
+# --- advanced direct: blind self-verification pass ------------------------ #
+def test_direct_verify_confirms_on_agreement():
+    # primary reads 136h (17 days); a blind re-read agrees -> confirmed + boosted
+    ext, s = _extractor(
+        {"openai/gpt-5.4-nano": _mega(total_days=17, conf=0.8),
+         "verify-model": {"monthly_total": 136, "days_worked": 17, "confidence": 0.9}},
+        direct_verify=True, direct_verify_model="verify-model")
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.verification == "confirmed"
+    assert r.confidence >= 0.9
+    assert "verify-model" in ext.router.client.calls          # the extra cheap call ran
+
+
+def test_direct_verify_flags_on_disagreement():
+    # primary reads 136h but a blind re-read says 96h -> flagged for review
+    ext, s = _extractor(
+        {"openai/gpt-5.4-nano": _mega(total_days=17, conf=0.9),
+         "verify-model": {"monthly_total": 96, "days_worked": 12, "confidence": 0.8}},
+        direct_verify=True, direct_verify_model="verify-model")
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.verification != "confirmed"
+    assert r.confidence <= 0.6                                 # -> needs_review
+    assert any("DISAGREED" in n for n in r.notes)
+
+
+def test_direct_verify_off_makes_no_extra_call():
+    ext, s = _extractor({"openai/gpt-5.4-nano": _mega(conf=0.9)}, direct_verify=False)
+    ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
+    assert ext.router.client.calls == ["openai/gpt-5.4-nano"]  # no verify call

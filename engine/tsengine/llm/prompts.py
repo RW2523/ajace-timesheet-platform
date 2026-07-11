@@ -325,7 +325,36 @@ SELF-CHECK
 - COMPUTE self_check for real: add the daily totals, compare to any printed
   total, verify each day's regular+overtime==total, and REPORT every discrepancy
   in self_check.discrepancies (do not silently "fix" the document).
+
+RECONCILE (the number the app trusts)
+- The authoritative monthly figure is the SUM of your in-month daily entries, so
+  make the entries correct and COMPLETE -- read every page/week before you answer.
+  stated_total is the sheet's OWN printed number, kept only for cross-check: if it
+  differs from your daily sum, keep BOTH and explain the gap in
+  self_check.discrepancies. NEVER pad, invent, or drop days to force a match, and
+  never copy a printed total into the daily entries.
 """
+
+
+# --------------------------------------------------------------------------- #
+# A second, BLIND verification prompt (direct flow self-check). It re-reads the
+# whole file from scratch and returns ONLY the monthly total -- it never sees the
+# first read's number, so agreement is a genuine independent corroboration.
+# --------------------------------------------------------------------------- #
+def direct_verify_system(month: int, year: int) -> str:
+    name = calendar.month_name[month]
+    ndays = calendar.monthrange(year, month)[1]
+    return (
+        f"You are double-checking one employee's timesheet for {name} {year} "
+        f"(1-{ndays} {name}). Read the ENTIRE document -- every page and every "
+        f"week. Count ONLY hours dated within {name} {year}: a week that crosses "
+        f"the month boundary contributes just its in-{name} days, and a period "
+        f"total shown more than once (portal exports repeat the same total 2-3x "
+        f"per page, and list per-project subtotals plus a day-total) is counted "
+        f"ONCE. Ignore any approver/manager signature. Reply with ONLY this JSON, "
+        f"nothing else:\n"
+        f'{{"monthly_total": <number, hours worked in {name} {year}>, '
+        f'"days_worked": <integer>, "confidence": <0..1>}}')
 
 
 def direct_extract_system(month: int, year: int) -> str:

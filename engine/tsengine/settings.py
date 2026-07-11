@@ -118,6 +118,11 @@ class Settings(BaseSettings):
     direct_autoaccept_confidence: float = 0.85  # at/above + no errors -> auto-accept
     direct_agreement_tolerance: float = 2.0   # cross-model monthly-total agreement (h)
     direct_max_pages: int = 20                # page cap per request
+    # advanced direct: a cheap BLIND second read that re-derives just the monthly
+    # total. Agreement -> confirmed (auto-accept eligible); disagreement -> flag
+    # for review. Catches a confident-but-wrong single read for ~one cheap call.
+    direct_verify: bool = True
+    direct_verify_model: str = "openai/gpt-5.4-nano"
 
     use_local_llm: str = "auto"              # auto (= on in budget flow) | on | off
     local_llm_base_url: str = "http://localhost:11434"

@@ -172,7 +172,56 @@ class DirectExtractor:
                     f"models disagreed on monthly total by {spread:g}h "
                     f"({', '.join(f'{t:g}' for t in totals_seen)})")
                 best.needs_llm = True   # -> routed to human review by the validator
+
+        # BLIND self-verification: a cheap second read re-derives just the monthly
+        # total (never shown the first read's number). Agreement corroborates the
+        # read -> confirmed; disagreement flags a possibly-wrong confident read.
+        if self.s.direct_verify and not best.needs_llm:
+            _, bt = _worked_total(best)
+            if bt > 0:
+                self._verify(best, bt, pdf, images, month, year, act)
+
         return [best]
+
+    # -- blind verification pass ---------------------------------------------
+    def _verify(self, best: NormResult, primary_total: float, pdf: Optional[Path],
+                images: list[Path], month: int, year: int, act: Callable) -> None:
+        from ..llm.client import _loads_lenient
+        from ..llm.prompts import direct_verify_system
+        model = self.s.direct_verify_model
+        msgs = [{"role": "system", "content": direct_verify_system(month, year)},
+                self.client.file_message("Give the verification JSON now.",
+                                         file_path=pdf, images=images)]
+        try:
+            with self.router._lock:
+                self.router.calls += 1
+            resp = self.client.chat(model, msgs, temperature=0.0, max_tokens=300,
+                                    json_mode=True)
+            self.router._record(model, resp.usage)
+            data = _loads_lenient(resp.text)
+        except Exception as exc:
+            log.warning("direct verify failed: %s", exc)
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            vt = float(data.get("monthly_total"))
+        except (TypeError, ValueError):
+            return
+        if abs(vt - primary_total) <= self.s.direct_agreement_tolerance:
+            best.verification = "confirmed"            # two blind reads agree
+            best.confidence = max(best.confidence, 0.9)
+            best.notes.append(
+                f"verified: an independent re-read agrees ({primary_total:g}h ≈ {vt:g}h)")
+            act("DirectVerifier", "confirmed",
+                f"{primary_total:g}h ≈ {vt:g}h", model=model)
+        else:
+            best.confidence = min(best.confidence, 0.6)  # -> needs_review
+            best.notes.append(
+                f"verification DISAGREED: primary {primary_total:g}h vs re-read {vt:g}h "
+                "-- please confirm")
+            act("DirectVerifier", "disagree",
+                f"{primary_total:g}h vs {vt:g}h", model=model, ok=False)
 
     def _absorb_direct_fields(self, res: NormResult, data: dict) -> None:
         """Fold the mega-contract's extra fields onto the NormResult so the
