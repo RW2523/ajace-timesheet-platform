@@ -18,7 +18,7 @@
     <string>warning</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/richardwatsonstephenamudha/Documents/aj_t/timesheet_intelligence</string>
+  <string>/Users/richardwatsonstephenamudha/Documents/aj_t/engine</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

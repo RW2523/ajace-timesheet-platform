@@ -139,7 +139,7 @@ worst residual errors (e.g. a weekend over-read of 240h → the correct 176h).
 ## Install
 
 ```bash
-cd timesheet_intelligence
+cd engine
 python -m pip install -r requirements.txt
 # Local OCR fallback (optional but recommended): tesseract
 #   macOS:  brew install tesseract     Ubuntu: apt-get install tesseract-ocr

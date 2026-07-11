@@ -39,3 +39,6 @@ out/
 
 # runtime tunnel URL (written by the tunnel script; ephemeral)
 .engine_tunnel_url
+
+# stray archives / working copies
+*.zip

@@ -1,12 +1,12 @@
 # Render Blueprint — deploys the Python AI engine as a Docker web service.
 # In Render: New ► Blueprint ► connect this repo. It reads this file, builds the
-# Dockerfile in timesheet_intelligence/, and asks you for the OpenRouter key.
+# Dockerfile in engine/, and asks you for the OpenRouter key.
 services:
   - type: web
     name: ajace-timesheet-engine
     runtime: docker
     repo: https://github.com/RW2523/ajace-timesheet-platform
-    rootDir: timesheet_intelligence
+    rootDir: engine
     dockerfilePath: Dockerfile
     plan: free                 # 512 MB RAM; upgrade to "standard" (2 GB) for heavy/concurrent files
     region: virginia           # us-east, near the Supabase/Vercel stack

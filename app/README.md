@@ -19,7 +19,7 @@ Browser ──► Next.js (App Router, port 3009)
          • Storage (ts-uploads)
 ```
 
-The Python engine lives in `../timesheet_intelligence`. The web app never does
+The Python engine lives in `../engine`. The web app never does
 extraction itself — it calls the engine and persists the results to Supabase.
 
 ## Database (Supabase, `ts_` namespace, all RLS-protected)
@@ -39,11 +39,11 @@ RLS: employees see only their own rows; admins (via `ts_is_admin()`) can read al
 
 ```bash
 # 1) Python engine (from repo root)
-cd timesheet_intelligence
+cd engine
 python3 -m uvicorn tsengine.api.app:app --host 127.0.0.1 --port 8078
 
 # 2) Next.js app
-cd timesheet_app
+cd app
 npm install
 npm run dev          # http://localhost:3009
 ```
@@ -103,4 +103,4 @@ baked into `lib/supabase/config.js` as fallbacks (safe — anon key is public by
 design, protected by RLS), so the build needs no dashboard env configuration.
 Override with `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
 
-Redeploy: `cd timesheet_app && npx vercel deploy --prod --yes`.
+Redeploy: `cd app && npx vercel deploy --prod --yes`.
