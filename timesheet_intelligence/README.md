@@ -355,6 +355,30 @@ instead of silently shipping. A genuine part-time month backed by a real grid is
 evidence-valid and untouched. (`normalize/normalizer.py:_apply_vote_validity`,
 applied at the single `_attach_identity` chokepoint on every return path.)
 
+### Carrying the wins to the LLM/direct flow (prompt clauses + blindness)
+
+The `DIRECT_MEGA_CONTRACT` prompt (`llm/prompts.py`) — used by the whole-file
+`direct` flow and the Premium+ vision re-read — gained four clauses so the model
+reads the way the deterministic path now counts:
+- **Month boundary** — emit every dated day with its real date; the engine keeps
+  only in-month days. A weekly/bi-weekly total that crosses the boundary must
+  **not** go in `stated_total` (which would pull in the other month) — leave it
+  null and rely on per-day entries.
+- **Never double-count a period** — portal exports repeat each period's total
+  2–3× per page with project subtotals; count each period once (the day-total
+  row, not the sum of project rows), and keep two distinct equal weeks as two.
+- **Printed total vs excluded rows** — copy the sheet's own total to
+  `stated_total`; if the daily sum exceeds it, the extra is a stray no-in/out or
+  holiday row — report the gap, don't inflate past the sheet's own total.
+- **Worker, not approver** — "Approved by / Manager / Locked by / signature" is
+  the approver → `manager_name`, never `employee_name`; fall back to the filename
+  over an approver name.
+
+The direct read stays **blind**: the model is never shown a pre-computed total,
+so its extraction can't be biased by one. The per-file instruction is a fixed,
+number-free string and the system prompt is a pure function of `(month, year)` —
+locked in by a regression test.
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

@@ -251,6 +251,10 @@ IDENTITY
   client, address, city, PROJECT, or a SOFTWARE/TOOL name (e.g. "Clarity PPM",
   "Workday", "SAP"), and NEVER the APPROVER/MANAGER. Look near "Employee", "Name",
   "Consultant", "Contractor", or a signature. If truly none, null.
+- "Approved by X", "Manager: X", "Timesheet Approver: X", "Hiring Manager: X",
+  "Locked by X", or a lone signature is the APPROVER -- NOT the worker. Put that
+  name in manager_name, never employee_name. If the worker's own name is not
+  clearly labelled, prefer the name in the FILENAME over any approver name.
 
 DO NOT WRONGLY REJECT (important)
 - A faint, low-contrast, handwritten, or hard-to-read SCAN/PHOTO is STILL a
@@ -281,6 +285,34 @@ COUNT DAYS ONCE (avoid over-reads)
   twice, even if it shows on two pages. A month has ~20-23 weekdays; if your
   days_worked exceeds 23 or your total exceeds ~230h, you almost certainly
   DOUBLE-COUNTED a week/page -- re-check and de-duplicate before answering.
+
+MONTH BOUNDARY (the figures are for the target month ONLY)
+- Emit a per-day entry for EVERY dated day you see, using its REAL printed date,
+  even days in the previous or next month -- the engine keeps only the days that
+  fall inside the target month. Give real per-day hours; NEVER prorate or split a
+  week by a fraction.
+- stated_total is ONLY for a total the document prints FOR THE TARGET MONTH. If
+  the only printed total is a WEEKLY or BI-WEEKLY period total that crosses the
+  month boundary (e.g. a period "04/19-05/02" totalling 80h), do NOT put it in
+  stated_total -- leave stated_total null and rely on the per-day entries so the
+  month is computed from in-month days only.
+
+NEVER DOUBLE-COUNT A PERIOD (portal exports: Beeline, Jira, Unanet, Time@IBM, Clarity)
+- These repeat each pay period's total row TWO or THREE times per page, and also
+  show per-project subtotal rows PLUS a combined day-total row. Count each pay
+  period EXACTLY ONCE: take the single day-total row, never the sum of the project
+  rows, and never add the same period again because it reappears on another page.
+- If the file is several weekly/bi-weekly period pages, emit each period's days
+  once (or one weekly_totals row per DISTINCT date range). Two different weeks that
+  happen to both total 40h are BOTH real -- keep both; only collapse exact repeats
+  of the SAME date range.
+
+PRINTED TOTAL vs EXCLUDED ROWS
+- If the sheet prints its own month/period total, copy it EXACTLY into stated_total.
+  If your summed daily hours EXCEED that printed total, the extra is almost always
+  a stray row the sheet itself excludes -- a row with hours but NO in/out times, or
+  a Holiday/Leave row. Keep such rows in their proper fields, but record the gap in
+  self_check.discrepancies and do not silently inflate past the sheet's own total.
 
 HOURS TYPES
 - If the sheet separates REGULAR/BILLABLE from SICK/VACATION/HOLIDAY, put each in

@@ -142,3 +142,39 @@ def test_review_routing_needs_review_on_medium_confidence():
     em = _em(136, 17, 0.7)                    # below autoaccept 0.85, no errors
     Validator().validate(em)
     assert em.review_status == "needs_review"
+
+
+# --- step 4: consensus prompt clauses + blindness guard ------------------- #
+def test_direct_prompt_carries_consensus_clauses():
+    from tsengine.llm.prompts import direct_extract_system
+    p = direct_extract_system(5, 2026)
+    # month-clip, portal no-double-count, printed-total/excluded-row, approver
+    assert "MONTH BOUNDARY" in p
+    assert "NEVER DOUBLE-COUNT A PERIOD" in p
+    assert "PRINTED TOTAL vs EXCLUDED ROWS" in p
+    assert "APPROVER" in p and "manager_name" in p
+    # the boundary clause must steer a crossing period total away from stated_total
+    assert "stated_total null" in p or "leave stated_total null" in p
+
+
+def test_direct_read_is_blind_of_any_candidate():
+    # BLINDNESS: the model is never shown a pre-computed/deterministic total, so
+    # its read cannot be biased by one. The per-file instruction is a fixed string
+    # with no numbers, and the system prompt is a pure function of (month, year).
+    captured = {}
+
+    class _Rec(_FakeClient):
+        def chat(self, model, messages, **kw):
+            captured["messages"] = messages
+            return super().chat(model, messages, **kw)
+
+    ext = DirectExtractor(_FakeRouter(_Rec({"*": _mega(conf=0.9)})),
+                          Settings(flow="direct"))
+    ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)
+    msgs = captured["messages"]
+    user = [m for m in msgs if m["role"] == "user"][0]
+    assert user["content"] == "Extract the full mega-contract JSON for this document now."
+    assert "candidate" not in str(msgs).lower()
+    # the system prompt depends only on month/year, not on any prior read
+    from tsengine.llm.prompts import direct_extract_system
+    assert msgs[0]["content"] == direct_extract_system(4, 2026)
