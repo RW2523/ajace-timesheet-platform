@@ -29,7 +29,7 @@ export async function POST(request) {
 
   // Admin-chosen AI flow: "direct" = whole file to the GPT-5.4 ladder (default),
   // "premium" = parse + gpt-4o-mini + gemini, "budget" = free local model first.
-  let flow = "direct";
+  let flow = "premium_plus";
   try {
     const { data: fs } = await supabase
       .from("ts_app_settings").select("value").eq("key", "ai_flow").single();

@@ -325,11 +325,22 @@ class TimesheetPipeline:
         cand = out[0]
         cw, ct = self._worked_total(cand)
         ow, ot = self._worked_total(current)
-        if ct > ot and cw <= 24 and ct <= 300:          # more plausible read wins
+        # Keep the re-read ONLY when it's clearly MORE plausible than Premium's:
+        #  * over-read fix: Premium read >230h (impossible) and the re-read lands in
+        #    a sane 8-230h month -> take it (even though it's a lower number); or
+        #  * under-read recovery: the re-read reaches at least ~a week of work
+        #    (>=40h) AND beats Premium.
+        # A suspiciously LOW re-read (<40h) never displaces Premium -- that is what
+        # prevents the Suman 160->8 / Suganthan 144->15 regressions; those stay on
+        # Premium's read and simply flag for review.
+        plausible = cand.entries or cand.weekly_totals or cand.stated_total
+        ok = (plausible and cw <= 24 and 0 < ct <= 230
+              and (ot > 230 or (ct >= 40 and ct > ot)))
+        if ok:
             cand.notes.append(
                 f"premium-plus vision re-read: {ot:g}h/{ow}d -> {ct:g}h/{cw}d")
             act("VisionReader", "second_opinion",
-                f"under-read {ot:g}h -> {ct:g}h", model=cand.method.split(":", 1)[-1])
+                f"{ot:g}h -> {ct:g}h", model=cand.method.split(":", 1)[-1])
             return cand
         return current
 
