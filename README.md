@@ -13,7 +13,6 @@ full source-evidence behind every number.
 | [`engine/`](engine/) | **Core engine** — Python / FastAPI (`tsengine`). Multi-format extract → deterministic normalize → validate → LLM/vision (OpenRouter) only when needed. Exposes `/api/process-upload`, `/api/preview-upload`, `/api/health` on `:8078`. |
 | [`app/`](app/) | **Product app** — Next.js + Supabase (`:3009`). Email/password auth, employee portal (upload → AI populate → review/edit → questionnaire → submit), and an admin console. Wraps the engine over HTTP; persists to Supabase (auth, Postgres, storage). |
 | [`scripts/`](scripts/) | launchd plists + tunnel script for running the engine durably on a Mac, and `DURABLE_SETUP.md`. |
-| [`render.yaml`](render.yaml) | Render Blueprint — deploys the engine as a Docker web service (auto-deploys on push to `main`). |
 
 ## Architecture
 
@@ -69,14 +68,13 @@ Run the engine test suite: `cd engine && python -m pytest -q`.
 
 ## Deployment
 
-| Piece | Where | Notes |
-|-------|-------|-------|
-| Engine | **Render** (Docker, `render.yaml`) or a Mac via `scripts/` (launchd + Cloudflare tunnel) | set `TSE_OPENROUTER_API_KEY`; auto-deploys on push to `main` |
-| App | **Vercel** (Root Directory = `app`) | set `ENGINE_URL` + Supabase env vars |
-| Data / Auth | **Supabase** | `ts_`-prefixed tables; email/password auth |
+No hosting provider is wired into the repo — bring your own.
 
-> After renaming folders, update **Vercel → Root Directory = `app`** and confirm
-> **Render → rootDir = `engine`** (already set in `render.yaml`).
+| Piece | Options | Notes |
+|-------|---------|-------|
+| Engine | any Docker host, or a Mac via `scripts/` (launchd + Cloudflare tunnel) | build `engine/Dockerfile`; set `TSE_OPENROUTER_API_KEY` |
+| App | any Next.js host (set the project root to `app/`) | set `ENGINE_URL` + Supabase env vars |
+| Data / Auth | **Supabase** | `ts_`-prefixed tables; email/password auth |
 
 See [`engine/README.md`](engine/README.md) and [`app/README.md`](app/README.md)
 for the deep dives.
@@ -85,6 +83,5 @@ for the deep dives.
 
 Secrets (`.env*`), build artifacts (`node_modules/`, `.next/`, `__pycache__/`),
 and generated evaluation reports are git-ignored. The sample timesheet data under
-`Timesheet/` and `TimeSheet-May/` is intentionally committed by the owner (it
-contains employee PII + invoices) — keep the repository access controlled
-accordingly.
+`Timesheet-April/` and `TimeSheet-May/` is committed for testing and contains
+employee PII + invoices — **this is a private repository; keep it private.**

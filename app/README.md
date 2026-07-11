@@ -82,25 +82,24 @@ npm run dev          # http://localhost:3009
 - **US federal holidays** are computed in `lib/holidays.js` and surfaced in the
   calendar + questionnaire ("did you work this holiday?").
 
-## Deployment (Vercel)
+## Deployment
 
-The Next.js app is deployed to Vercel: **https://timesheetapp-three.vercel.app**
+No hosting provider is wired into the repo — deploy the Next.js app to any host
+you like (set the project **root directory to `app/`**).
 
-**Important — the app runs on Vercel, but the Python AI engine does not.** The
-engine shells out to `tesseract` and `LibreOffice` and uses heavy native libs
-with long runtimes, none of which Vercel's serverless functions support. So:
+**The app host does not run the Python AI engine.** The engine shells out to
+`tesseract` / `LibreOffice` and uses heavy native libs with long runtimes, which
+serverless functions don't support. So:
 
-- **On Vercel** (no engine): auth, signup, the **manual** timesheet flow, edit,
+- **App only** (no engine): auth, signup, the **manual** timesheet flow, edit,
   questionnaire, US-holidays, validation, submit, and the admin console all work.
   The "Process with AI" upload is hidden (`NEXT_PUBLIC_AI_ENABLED` unset → off).
-- **To enable AI** on a deployment: host the engine separately (Render, Railway,
-  Fly.io, a Docker host, etc.), then set on the Vercel project:
+- **To enable AI**: host the engine separately (any Docker host), then set on the
+  app deployment:
   - `NEXT_PUBLIC_AI_ENABLED=true`
   - `ENGINE_URL=https://your-engine-host`
 
-Supabase is the **procurement-intel** project; the publishable URL + anon key are
-baked into `lib/supabase/config.js` as fallbacks (safe — anon key is public by
-design, protected by RLS), so the build needs no dashboard env configuration.
-Override with `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-
-Redeploy: `cd app && npx vercel deploy --prod --yes`.
+Supabase env: the publishable URL + anon key can be baked into
+`lib/supabase/config.js` as fallbacks (safe — the anon key is public by design,
+protected by RLS), or set `NEXT_PUBLIC_SUPABASE_URL` /
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` on the host.

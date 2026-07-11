@@ -164,8 +164,8 @@ Key settings (all `TSE_`-prefixed; see `.env.example`):
 
 **CLI** — process a folder and print a summary + write JSON:
 ```bash
-python -m tsengine.cli --folder "/path/to/Timesheet" --month 4 --year 2026
-python -m tsengine.cli --folder "/path/to/Timesheet" --month 4 --year 2026 --serve
+python -m tsengine.cli --folder "/path/to/Timesheet-April" --month 4 --year 2026
+python -m tsengine.cli --folder "/path/to/Timesheet-April" --month 4 --year 2026 --serve
 ```
 Output: `output/report_YYYY_MM.json` (+ `output/latest_report.json`). The CLI
 summary also prints **OpenRouter usage and actual cost** (tokens + USD, broken

@@ -11,7 +11,7 @@ import pytest
 from tsengine import process_folder
 from tsengine.settings import Settings
 
-DEFAULT = "/Users/richardwatsonstephenamudha/Documents/aj_t/Timesheet"
+DEFAULT = "/Users/richardwatsonstephenamudha/Documents/aj_t/Timesheet-April"
 FOLDER = os.environ.get("TSE_TEST_FOLDER", DEFAULT)
 
 pytestmark = pytest.mark.skipif(
