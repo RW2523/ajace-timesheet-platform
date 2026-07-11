@@ -321,6 +321,25 @@ work for any period.
   dropped into the May run), it's surfaced as a remap candidate.
   (`normalize/dates.py:resolve_target_period`, wired in `pipeline.py`.)
 
+### Portal-export period parsing & dedupe (scanned biweekly exports)
+
+Biweekly/weekly portal exports (Beeline, Jira/Timesheets-for-Jira, Unanet,
+Time@IBM, Clarity) print **one pay period per page** as a date range header —
+`04/19/2026 to 05/02/2026`, `Apr 26, 2026 - May 2, 2026`, `Apr 25 - May 01,
+2026` — but the OCR reads the total row two or three times per page, and pages
+also carry per-project subtotal rows. Summing every verified row double- or
+triple-counted the month to **280–448h**. The new `portal_periods` strategy
+(`normalize/normalizer.py`) anchors each verified total to the **period** it
+sits under, takes the **max per period** (collapsing OCR repeats *and* project
+subtotals to the one real weekly total), **dedupes by date range** — never by
+hours, so five genuinely-identical 40h weeks all survive — and emits one weekly
+total per period that the month-clip above then trims to the target month. It
+steps over noise ranges (a >1yr assignment "Date Range" line), and returns
+`None` on a plain `WK1..WK5 Total` scan so that falls through to the existing
+sum-verified OCR path. Verified on the real scans: Saurabh 448→**152**, Jude
+344→**160** (both exact truth), Arunkumar 384→**128** (plausible; the remainder
+is OCR dropping a page).
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

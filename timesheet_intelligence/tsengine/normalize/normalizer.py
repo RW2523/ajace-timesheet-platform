@@ -541,6 +541,122 @@ _MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july",
 
 _OCR_NUM = re.compile(r"(?<![\w.])\d{1,3}(?:\.\d{1,2})?(?![\w.:])")
 
+# a pay-period header on a portal export. Covers the real-world shapes seen
+# across Beeline / Jira / Unanet / Time@IBM exports:
+#   04/19/2026 to 05/02/2026      (numeric, "to")
+#   Apr 26, 2026 - May 2, 2026    (textual month-first, both years)
+#   Apr 25 - May 01, 2026         (year only on the end date)
+#   26-Apr-2026 - 02-May-2026     (day-first textual)
+_MON_RE = r"(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?"
+_DATE_SIDE = (
+    rf"\d{{1,2}}[/\-.]\d{{1,2}}[/\-.]\d{{2,4}}"          # 05/02/2026
+    rf"|{_MON_RE}\s+\d{{1,2}}(?:,?\s*\d{{4}})?"           # Apr 26, 2026 / Apr 26
+    rf"|\d{{1,2}}[ \-]{_MON_RE}[ \-]\d{{2,4}}"            # 26-Apr-2026
+)
+_PERIOD_RANGE = re.compile(
+    rf"({_DATE_SIDE})\s*(?:to|through|thru|–|—|-)\s*({_DATE_SIDE})", re.IGNORECASE)
+
+
+def _parse_period_side(tok: str, order: str, year: int,
+                       fallback_year: int) -> "Optional[dt.date]":
+    """Parse one side of a period range; if it lacks a year, borrow one."""
+    d = D.parse_date(tok, order, year)
+    if d is not None:
+        return d
+    # a yearless textual side ("Apr 25") -> append the range's year
+    return D.parse_date(f"{tok.rstrip(', ')} {fallback_year}", order, year)
+
+
+def _verified_subtotals(text: str) -> list[float]:
+    """Every 'last == sum of the rest' row value in a block of OCR text.
+
+    This is the arithmetic self-check that makes a number trustworthy: a stray
+    value that isn't a real subtotal can't pass, so we never emit a guess.
+    """
+    out: list[float] = []
+    for line in text.splitlines():
+        nums = [float(x) for x in _OCR_NUM.findall(line)]
+        if len(nums) < 3:
+            continue
+        *rest, last = nums
+        if last <= 0:
+            continue
+        s = round(sum(rest), 2)
+        if s > 0 and abs(s - last) <= 0.5:
+            out.append(last)
+    return out
+
+
+def _strategy_portal_periods(text: str, file: str, quality, order: str,
+                             month: int, year: int) -> Optional[NormResult]:
+    """Biweekly/weekly PORTAL exports (Beeline, Unanet, Time@IBM, Clarity...).
+
+    These print one pay period per page as ``<start> to <end>`` plus a grid whose
+    total row is often OCR'd two or three times. Summing every verified row then
+    double-counts to 280-448h ('48 days worked'). Instead we anchor each verified
+    total to the PERIOD it sits under, dedupe by DATE RANGE (never by hours, so two
+    genuinely-distinct equal weeks are both kept), and emit one WeeklyTotal per
+    period -- which the rollup then clips to the target month by workday.
+
+    Returns None when there is no period-range structure, so a plain
+    ``WK1..WK5 Total`` scan falls through to ``_strategy_ocr_totals``.
+    """
+    # First collect only the VALID pay-period headers (a sane week/fortnight
+    # span). Portal pages also carry noise ranges -- an assignment contract
+    # "Date Range 2/7/2026 - 2/18/2027" prints on every page; if we segmented on
+    # every regex hit, that >1yr range would sit between a period header and its
+    # total row and orphan the total. Filtering to valid periods first, then
+    # segmenting between consecutive valid ones, steps right over that noise.
+    periods: list[tuple[int, dt.date, dt.date]] = []   # (text_offset, start, end)
+    for m in _PERIOD_RANGE.finditer(text):
+        yr_hint = year
+        we0 = D.parse_date(m.group(2), order, year)
+        if we0 is not None:
+            yr_hint = we0.year
+        ws = _parse_period_side(m.group(1), order, year, yr_hint)
+        we = _parse_period_side(m.group(2), order, year, yr_hint)
+        if ws is None or we is None:
+            continue
+        if we < ws:
+            ws, we = we, ws
+        if not (0 < (we - ws).days <= 31):        # skip contract/assignment ranges
+            continue
+        periods.append((m.end(), ws, we))
+    if not periods:
+        return None
+    # Anchor each period to the MAX verified total in the span up to the next
+    # valid period. MAX (not sum) collapses both the OCR-repeated total rows AND
+    # per-project subtotal rows (37.5 + 2.5 + a 40 day-total) to the one real
+    # weekly total; identical periods then merge by date range.
+    best: dict[tuple[dt.date, dt.date], float] = {}
+    for i, (off, ws, we) in enumerate(periods):
+        seg_end = periods[i + 1][0] if i + 1 < len(periods) else len(text)
+        vals = _verified_subtotals(text[off:seg_end])
+        if not vals:
+            continue
+        key = (ws, we)
+        best[key] = max(best.get(key, 0.0), max(vals))
+    if not best:
+        return None
+    # require at least one period that actually touches the target month, else
+    # this file belongs to another month -- let other strategies / the period
+    # resolver handle it rather than emitting a zero here.
+    if not any(D.week_overlap_fraction(ws, we, month, year) > 0 for ws, we in best):
+        return None
+    res = NormResult(file=file, method="portal_periods",
+                     quality=quality, confidence=0.62)
+    for (ws, we), tot in sorted(best.items()):
+        r_, o_, t_ = H.split_regular_overtime(tot, None, None)
+        res.weekly_totals.append(WeeklyTotal(
+            week_start=ws, week_end=we, regular_hours=r_, overtime_hours=o_,
+            total_hours=t_,
+            in_month_fraction=round(D.week_overlap_fraction(ws, we, month, year), 3),
+            sources=[SourceRef(file=file, extractor="portal_periods")]))
+    res.notes.append(
+        f"{len(res.weekly_totals)} pay period(s) parsed from a portal export; "
+        "per-period totals deduped by date range and clipped to the month")
+    return res
+
 
 def _strategy_ocr_totals(text: str, file: str, quality) -> Optional[NormResult]:
     """Sum-VERIFIED month total from an OCR'd scan.
@@ -668,6 +784,15 @@ class Normalizer:
         # clean Excel/PDF never reaches this heuristic. Arithmetically self-checking
         # (last number == sum of the rest), so it can't emit a guessed total.
         if raw.images and raw.text:
+            # portal exports first (period-structured, deduped by date range),
+            # then the flat sum-verified fallback for plain WK1..WK5 scans.
+            portal = _strategy_portal_periods(
+                raw.text, raw.file, raw.quality, order, month, year)
+            if portal is not None and portal.weekly_totals:
+                if merged and merged.entries:
+                    portal.entries = merged.entries        # keep any partial grid
+                self._attach_identity(portal, raw, client_hint)
+                return [portal]
             ocr_res = _strategy_ocr_totals(raw.text, raw.file, raw.quality)
             if ocr_res is not None:
                 if merged and merged.entries:

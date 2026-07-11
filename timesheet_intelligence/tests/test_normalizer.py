@@ -1,7 +1,9 @@
 import datetime as dt
 
+from tsengine.aggregate.registry import EmployeeRegistry
 from tsengine.normalize.normalizer import (Normalizer, _assign_roles,
                                            _strategy_daily_grid,
+                                           _strategy_portal_periods,
                                            _strategy_text_hours_labeled)
 from tsengine.schema import (ExtractionQuality, FileKind, RawExtraction,
                              RawTable, SourceRef)
@@ -97,3 +99,122 @@ def test_text_hours_labeled_flags_conflicting_values():
     e = res.entries[0]
     assert e.total is None
     assert any(i.code.value == "UNCLEAR" for i in e.issues)
+
+
+# --- portal-export period parsing (step 2: week dedupe) ------------------- #
+# A biweekly portal export whose per-period total row is OCR'd 3x per page.
+# The flat sum-verified strategy would add every repeat -> 448h; the period
+# strategy anchors totals to their date range, dedupes the repeats, and the
+# rollup clips each period to the month by workday.
+_SAURABH_OCR = """----- page 1 (OCR) -----
+Approved FNMATSO1500615 04/19/2026 to 05/02/2026 Fannie Mae
+ST /Hr - 8.00 8.00 8.00 8.00 8.00 8.00 8.00 8.00 8.00 8.00 80.00
+Billable Total 0.00 8.00 8.00 8.00 8.00 8.00 0.00 0.00 8.00 8.00 8.00 8.00 8.00 0.00 80.00
+0.00 8.00 8.00 8.00 8.00 8.00 0.00 0.00 8.00 8.00 8.00 8.00 8.00 0.00 80.00
+----- page 2 (OCR) -----
+Approved FNMATSO1502613 05/03/2026 to 05/16/2026 Fannie Mae
+Billable Total 0.00 8.00 8.00 8.00 8.00 8.00 0.00 0.00 8.00 8.00 8.00 8.00 8.00 0.00 80.00
+----- page 3 (OCR) -----
+Approved FNMATSO1502614 05/17/2026 to 05/30/2026 Fannie Mae
+Billable Total 0.00 8.00 8.00 8.00 8.00 8.00 0.00 0.00 0.00 8.00 8.00 8.00 0.00 0.00 64.00
+Day Total 0.00 8.00 8.00 8.00 8.00 8.00 0.00 0.00 0.00 8.00 8.00 8.00 0.00 0.00 64.00
+"""
+
+
+def test_portal_periods_dedupes_repeated_totals():
+    res = _strategy_portal_periods(_SAURABH_OCR, "saurabh.pdf",
+                                   ExtractionQuality.OCR, "MDY", 5, 2026)
+    assert res is not None
+    # three distinct periods, each counted once (not the 3x/2x OCR repeats)
+    spans = sorted((w.week_start, w.week_end, w.total_hours) for w in res.weekly_totals)
+    assert spans == [
+        (dt.date(2026, 4, 19), dt.date(2026, 5, 2), 80.0),
+        (dt.date(2026, 5, 3), dt.date(2026, 5, 16), 80.0),
+        (dt.date(2026, 5, 17), dt.date(2026, 5, 30), 64.0),
+    ]
+
+
+def test_portal_periods_rollup_clips_to_month():
+    # end-to-end: the 448h flat-sum bug becomes the correct clipped 152h.
+    res = _strategy_portal_periods(_SAURABH_OCR, "saurabh.pdf",
+                                   ExtractionQuality.OCR, "MDY", 5, 2026)
+    res.employee_name = "Saurabh Limje"
+    em = EmployeeRegistry().build([res], 5, 2026)[0]
+    # P1 04/19-05/02 -> only May 1 in-month (8h); P2 full 80h; P3 full 64h
+    assert round(em.monthly_total, 2) == 152.0
+
+
+def test_portal_periods_keeps_distinct_equal_weeks():
+    # THE false-merge guard: five identical 40h weeks with DISTINCT date ranges
+    # must all survive (200h), never collapse to one. Dedup keys on date range,
+    # never on hours.
+    weeks = [("05/04/2026", "05/08/2026"), ("05/11/2026", "05/15/2026"),
+             ("05/18/2026", "05/22/2026"), ("05/25/2026", "05/29/2026"),
+             ("06/01/2026", "06/05/2026")]
+    text = "".join(
+        f"----- page {i+1} (OCR) -----\nPeriod {a} to {b}\n"
+        f"Total 8.00 8.00 8.00 8.00 8.00 40.00\n"
+        for i, (a, b) in enumerate(weeks))
+    res = _strategy_portal_periods(text, "grinder.pdf",
+                                   ExtractionQuality.OCR, "MDY", 5, 2026)
+    assert res is not None
+    assert len(res.weekly_totals) == 5           # not merged to 1
+    res.employee_name = "Distinct Weeks"
+    em = EmployeeRegistry().build([res], 5, 2026)[0]
+    assert round(em.monthly_total, 2) == 160.0   # 4 May weeks * 40; June week clipped out
+
+
+def test_portal_periods_none_without_period_structure():
+    # a plain WK1..WK5 scan has no "<date> to <date>" header -> falls through
+    plain = "WK1 WK2 WK3 WK4 Total\n40 40 40 40 160\n"
+    assert _strategy_portal_periods(plain, "scan.png",
+                                    ExtractionQuality.OCR, "MDY", 5, 2026) is None
+
+
+def test_portal_periods_textual_month_and_project_subtotals():
+    # Jira-style: "Apr 26, 2026 - May 2, 2026" + per-project subtotal rows plus a
+    # day-total row. MAX-per-period keeps the 40h weekly total, not 37.5+2.5+40.
+    jira = (
+        "----- page 1 (OCR) -----\nApr 26, 2026 - May 2, 2026 Weekly\n"
+        "Magnolia - MCMS 0 7.50 7.50 7.50 7.50 7.50 0 37.50\n"
+        "Portfolio Management - PM 0 0.50 0.50 0.50 0.50 0.50 0 2.50\n"
+        "0 8.00 8.00 8.00 8.00 8.00 0 40.00\n"
+        "----- page 2 (OCR) -----\nMay 3, 2026 - May 9, 2026 Weekly\n"
+        "0 8.00 8.00 8.00 8.00 8.00 0 40.00\n")
+    res = _strategy_portal_periods(jira, "jira.pdf",
+                                   ExtractionQuality.OCR, "MDY", 5, 2026)
+    assert [w.total_hours for w in res.weekly_totals] == [40.0, 40.0]
+    assert res.weekly_totals[0].week_start == dt.date(2026, 4, 26)
+
+
+def test_portal_periods_year_only_on_end_date():
+    # Beeline-style: the start side has no year ("Apr 25 - May 01, 2026").
+    beeline = (
+        "----- page 1 (OCR) -----\nApr 25 - May 01, 2026 Locked\n"
+        "0 8.00 8.00 8.00 8.00 8.00 0 40.00\n")
+    res = _strategy_portal_periods(beeline, "beeline.pdf",
+                                   ExtractionQuality.OCR, "MDY", 5, 2026)
+    assert res.weekly_totals[0].week_start == dt.date(2026, 4, 25)
+    assert res.weekly_totals[0].week_end == dt.date(2026, 5, 1)
+
+
+def test_portal_periods_ignores_interfering_assignment_range():
+    # Beeline prints a >1yr "Date Range 2/7/2026 - 2/18/2027" assignment line on
+    # every page, between the real period header and its total row. It must be
+    # stepped over, not allowed to orphan the period's total.
+    page = (
+        "----- page {n} (OCR) -----\n{a} - {b}, 2026\n"
+        "Date Range 2/7/2026 - 2/18/2027\n"
+        "Sat Sun Mon Tue Wed Thu Fri TOTAL\n"
+        "Regular Time 8 8 8 8 8 40\nTOTAL HOURS 0 0 8 8 8 8 8 40\n")
+    text = (page.format(n=1, a="Apr 25", b="May 01")
+            + page.format(n=2, a="May 02", b="May 08")
+            + page.format(n=3, a="May 09", b="May 15"))
+    res = _strategy_portal_periods(text, "jude.pdf",
+                                   ExtractionQuality.OCR, "MDY", 5, 2026)
+    assert res is not None
+    assert [w.total_hours for w in res.weekly_totals] == [40.0, 40.0, 40.0]
+    em = EmployeeRegistry().build(
+        [setattr(res, "employee_name", "Jude") or res], 5, 2026)[0]
+    # Apr25-May01 -> May 1 only (8h); May02-08 & May09-15 full -> 88h
+    assert round(em.monthly_total, 2) == 88.0
