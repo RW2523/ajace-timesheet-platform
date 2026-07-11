@@ -1,12 +1,21 @@
 import datetime as dt
 
 from tsengine.aggregate.registry import EmployeeRegistry
-from tsengine.normalize.normalizer import (Normalizer, _assign_roles,
+from tsengine.normalize.normalizer import (DayEntry, NormResult, Normalizer,
+                                           _apply_vote_validity, _assign_roles,
                                            _strategy_daily_grid,
                                            _strategy_portal_periods,
                                            _strategy_text_hours_labeled)
 from tsengine.schema import (ExtractionQuality, FileKind, RawExtraction,
-                             RawTable, SourceRef)
+                             RawTable, SourceRef, WeeklyTotal)
+
+_WKND = {5, 6}
+
+
+def _mk(method, entries=(), weekly=(), stated=None, conf=1.0):
+    return NormResult(file="f", method=method, quality=ExtractionQuality.NATIVE,
+                      entries=list(entries), weekly_totals=list(weekly),
+                      stated_total=stated, confidence=conf)
 
 
 def test_overtime_role_not_stolen_by_generic_hours():
@@ -218,3 +227,49 @@ def test_portal_periods_ignores_interfering_assignment_range():
         [setattr(res, "employee_name", "Jude") or res], 5, 2026)[0]
     # Apr25-May01 -> May 1 only (8h); May02-08 & May09-15 full -> 88h
     assert round(em.monthly_total, 2) == 88.0
+
+
+# --- vote-validity: a lone/partial read may not silently decide a month ---- #
+def test_vote_validity_flags_lone_stated_total():
+    # a legacy .xls whose only value is one summary cell (Justin 8h vs 170h)
+    r = _mk("summary_total", stated=8.0, conf=0.6)
+    _apply_vote_validity(r, 5, 2026, _WKND)
+    assert r.needs_llm and r.confidence <= 0.25
+
+
+def test_vote_validity_flags_single_day_read():
+    # a docx where one "8 Hours" label was read (Hemachandra 8h vs 168h)
+    r = _mk("text_hours_labeled",
+            entries=[DayEntry(date=dt.date(2026, 5, 1), total=8.0)], conf=0.72)
+    _apply_vote_validity(r, 5, 2026, _WKND)
+    assert r.needs_llm and r.confidence <= 0.25
+
+
+def test_vote_validity_keeps_full_grid():
+    # a real 12-day grid (72h) is evidence-valid -> untouched
+    ents = [DayEntry(date=dt.date(2026, 5, d), total=6.0) for d in range(1, 13)]
+    r = _mk("daily_grid", entries=ents, conf=0.9)
+    _apply_vote_validity(r, 5, 2026, _WKND)
+    assert not r.needs_llm and r.confidence == 0.9
+
+
+def test_vote_validity_exempts_verified_methods():
+    # a deduped portal period or sum-verified OCR total is self-checking even if
+    # the in-month portion is small -> never demoted
+    r = _mk("portal_periods",
+            weekly=[WeeklyTotal(week_start=dt.date(2026, 4, 27),
+                                week_end=dt.date(2026, 5, 3), total_hours=40.0)],
+            conf=0.62)
+    _apply_vote_validity(r, 5, 2026, _WKND)
+    assert not r.needs_llm and r.confidence == 0.62
+
+
+def test_vote_validity_keeps_multiweek_weekly_totals():
+    # two full in-month weeks (>=10 weekdays) stand on their own
+    wk = [WeeklyTotal(week_start=dt.date(2026, 5, 4), week_end=dt.date(2026, 5, 8),
+                      total_hours=40.0),
+          WeeklyTotal(week_start=dt.date(2026, 5, 11), week_end=dt.date(2026, 5, 15),
+                      total_hours=40.0)]
+    r = _mk("weekly_totals", weekly=wk, conf=0.7)
+    _apply_vote_validity(r, 5, 2026, _WKND)
+    assert not r.needs_llm and r.confidence == 0.7

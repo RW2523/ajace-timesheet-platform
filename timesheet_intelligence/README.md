@@ -340,6 +340,21 @@ sum-verified OCR path. Verified on the real scans: Saurabh 448→**152**, Jude
 344→**160** (both exact truth), Arunkumar 384→**128** (plausible; the remainder
 is OCR dropping a page).
 
+### Vote-validity: a lone read may not silently decide a month
+
+The "single-cell collapse" class shipped a tiny, confident number for a full
+month — a legacy `.xls` whose only parsed value is one summary cell (Justin
+**8h** vs a 170h month), a `.docx` where a single `8 Hours` label was read
+(Hemachandra **8h** vs 168h). A read may now only *decide* the month if it
+carries **month-scale evidence**: ≥6 worked day rows, weekly ranges covering ≥10
+in-month weekdays, or a self-verifying method (sum-verified OCR / deduped portal
+period). A read below **60h with ≤2 worked days and no full grid** is demoted —
+`needs_llm` + confidence capped at 0.25 — so the pipeline escalates (premium
+re-reads and recovers the real number) or, with no LLM, it routes to review
+instead of silently shipping. A genuine part-time month backed by a real grid is
+evidence-valid and untouched. (`normalize/normalizer.py:_apply_vote_validity`,
+applied at the single `_attach_identity` chokepoint on every return path.)
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

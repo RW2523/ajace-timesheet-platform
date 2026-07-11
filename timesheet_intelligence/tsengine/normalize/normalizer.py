@@ -535,6 +535,75 @@ def _clean(v) -> Optional[str]:
     return s or None
 
 
+# A read may only DECIDE the month if it carries month-scale evidence. Below
+# this many hours with fewer than a handful of worked days and no full grid, a
+# lone stated cell (or a mostly-empty grid) has almost certainly under-read a
+# real month -- so we demote it to "needs verification" instead of shipping e.g.
+# 8h for a 170h month. Methods that are arithmetically self-checking (a
+# sum-verified OCR row, a deduped portal period) are exempt.
+_VOTE_VALID_MIN_HOURS = 60.0
+_VOTE_VALID_MAX_SPARSE_DAYS = 2
+_VOTE_VALID_METHODS = ("ocr_verified_total", "portal_periods")
+
+
+def _res_month_total(res: "NormResult") -> float:
+    """Best-effort monthly hours a result asserts (entries, else weekly, else
+    the stated total) -- for plausibility gating only."""
+    ent = sum((e.total or e.regular or e.overtime or 0.0) for e in res.entries)
+    if ent > 0:
+        return round(ent, 2)
+    wk = sum((w.total_hours or 0.0) for w in res.weekly_totals)
+    if wk > 0:
+        return round(wk, 2)
+    return float(res.stated_total or 0.0)
+
+
+def _has_month_scale_evidence(res: "NormResult", month: int, year: int,
+                              weekend: set) -> bool:
+    """True when the read is backed by enough day-level data to stand on its own:
+    >=6 worked day rows, or weekly ranges covering >=10 in-month weekdays, or a
+    self-verifying method."""
+    if res.method and any(m in res.method for m in _VOTE_VALID_METHODS):
+        return True
+    worked = sum(1 for e in res.entries
+                 if (e.total or e.regular or e.overtime))
+    if worked >= 6:
+        return True
+    wd = 0
+    for w in res.weekly_totals:
+        span = (w.week_end - w.week_start).days + 1
+        for k in range(span):
+            d = w.week_start + dt.timedelta(days=k)
+            if d.month == month and d.year == year and d.weekday() not in weekend:
+                wd += 1
+    return wd >= 10
+
+
+def _apply_vote_validity(res: "NormResult", month: int, year: int,
+                         weekend: set) -> None:
+    """Demote a lone/partial read that can't credibly be a full month.
+
+    Fixes the 'single-cell collapse' class -- a legacy .xls whose only parsed
+    value is one summary cell (Justin 8h vs 170h), a mostly-empty grid (Charles
+    4h at confidence 1.0), a docx where one '8 Hours' label was read (Hemachandra
+    8h vs 168h). These get needs_llm + low confidence so the pipeline escalates
+    (or, with no LLM, they route to review) instead of silently shipping a wrong,
+    confident number. A genuine part-time month with a real grid (>=6 worked days
+    or weekly ranges) is evidence-valid and untouched.
+    """
+    if _has_month_scale_evidence(res, month, year, weekend):
+        return
+    total = _res_month_total(res)
+    worked = sum(1 for e in res.entries
+                 if (e.total or e.regular or e.overtime))
+    if total < _VOTE_VALID_MIN_HOURS and worked <= _VOTE_VALID_MAX_SPARSE_DAYS:
+        res.needs_llm = True
+        res.confidence = min(res.confidence, 0.25)
+        res.notes.append(
+            f"only {worked} day(s) / {total:g}h with no full grid -- likely a "
+            "partial or single-cell read; needs verification")
+
+
 _MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july",
                 "august", "september", "october", "november", "december"]
 
@@ -762,7 +831,7 @@ class Normalizer:
 
         merged = self._merge_table_results(results, raw) if results else None
         if merged and (merged.entries or merged.weekly_totals) and not merged.needs_llm:
-            self._attach_identity(merged, raw, client_hint)
+            self._attach_identity(merged, raw, client_hint, month, year)
             return [merged]
 
         # Safe text fallback for explicitly-labeled "<n> Hours" timecards.
@@ -776,7 +845,7 @@ class Normalizer:
                 if merged:
                     text_res.weekly_totals.extend(merged.weekly_totals)
                     text_res.notes.extend(merged.notes)
-                self._attach_identity(text_res, raw, client_hint)
+                self._attach_identity(text_res, raw, client_hint, month, year)
                 return [text_res]
 
         # Scanned/photo timesheets: try a SUM-VERIFIED total from the OCR text
@@ -791,13 +860,13 @@ class Normalizer:
             if portal is not None and portal.weekly_totals:
                 if merged and merged.entries:
                     portal.entries = merged.entries        # keep any partial grid
-                self._attach_identity(portal, raw, client_hint)
+                self._attach_identity(portal, raw, client_hint, month, year)
                 return [portal]
             ocr_res = _strategy_ocr_totals(raw.text, raw.file, raw.quality)
             if ocr_res is not None:
                 if merged and merged.entries:
                     ocr_res.entries = merged.entries       # keep any partial grid
-                self._attach_identity(ocr_res, raw, client_hint)
+                self._attach_identity(ocr_res, raw, client_hint, month, year)
                 return [ocr_res]
 
         # Summary/cover-sheet table that only states a monthly TOTAL (e.g. an
@@ -805,7 +874,7 @@ class Normalizer:
         # rather than burning a vision call that can't find a daily grid.
         summ = _strategy_summary_total(raw.tables, month, year)
         if summ is not None:
-            self._attach_identity(summ, raw, client_hint)
+            self._attach_identity(summ, raw, client_hint, month, year)
             return [summ]
 
         # Nothing structured worked -> mark for LLM/vision escalation.
@@ -818,7 +887,7 @@ class Normalizer:
             fallback.confidence = max(0.1, merged.confidence * 0.5)
         fallback.notes.append(
             "deterministic extraction insufficient; LLM/vision recommended")
-        self._attach_identity(fallback, raw, client_hint)
+        self._attach_identity(fallback, raw, client_hint, month, year)
         return [fallback]
 
     def _best_for_table(self, table, order, month, year, context_text):
@@ -888,8 +957,10 @@ class Normalizer:
         return merged
 
     def _attach_identity(self, res: NormResult, raw: RawExtraction,
-                         client_hint: Optional[str]):
+                         client_hint: Optional[str], month: int, year: int):
         res.employee_name = res.employee_name or raw.meta.get("name_hint")
         if not res.client:
             res.client = client_hint
         res.notes.extend(raw.notes)
+        # vote-validity gate: a lone/partial read may not silently decide a month
+        _apply_vote_validity(res, month, year, self.s.weekend_set)
