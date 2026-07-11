@@ -422,6 +422,23 @@ attached timesheet still wins. Recovered the Fw\_ `.eml` (0h → **160h**,
 needs_review). Wrong-month approvals are caught by the period resolver;
 implausibly small stated-only figures are caught by vote-validity.
 
+### Verification choke-point: no auto-accept unless CONFIRMED
+
+Every record carries a **`verification_status`** (`schema.py:VerificationStatus`):
+`confirmed` (two independent agreeing derivations), `confirmed_vision_only` (both
+were vision reads), `adopted_correction`, `voted` (testimony / an email), or
+`unverified`. The validator enforces **one structural rule** in `_route`:
+`auto_accepted` is impossible unless `verification_status == confirmed` (and the
+record is otherwise clean). The invariant lives in this single place, so no
+future gate can leak an unverified number to auto-accept the way a scattered
+condition once did. The consensus flow sets it explicitly (two-key CONFIRMED, a
+vision-only agreement → `confirmed_vision_only` → review, an email → `voted` →
+review, disagreement → `unverified`); other flows **derive** `confirmed` from a
+clean, confident read, so their behaviour is unchanged. Merged multi-file records
+take the **weakest** verification of their parts. An unresolvable worker name sets
+`name_source="unresolved"` with an `UNATTRIBUTED` flag rather than shipping a
+blank.
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

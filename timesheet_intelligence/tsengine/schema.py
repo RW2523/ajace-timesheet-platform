@@ -116,6 +116,18 @@ class ReviewStatus(str, Enum):
     BLOCKED = "blocked"               # errors / conflicts / low confidence -> must fix
 
 
+class VerificationStatus(str, Enum):
+    """How strongly a monthly number is corroborated. A record can only be
+    auto-accepted when it is CONFIRMED -- this invariant lives in one place
+    (the validator), so no future gate can leak an unverified number to
+    auto-accept the way a scattered condition once did."""
+    CONFIRMED = "confirmed"                          # two independent agreeing derivations
+    CONFIRMED_VISION_ONLY = "confirmed_vision_only"  # both derivations were vision reads
+    ADOPTED_CORRECTION = "adopted_correction"        # a stronger read replaced a bad one
+    VOTED = "voted"                                  # testimony / single-vote (e.g. an email)
+    UNVERIFIED = "unverified"                        # single or disagreeing -> not confirmed
+
+
 # --------------------------------------------------------------------------- #
 # Canonical timesheet model
 # --------------------------------------------------------------------------- #
@@ -199,6 +211,8 @@ class EmployeeMonth(BaseModel):
     confidence: float = 0.0
     flow: str = "premium"                                  # which flow produced this
     review_status: str = ReviewStatus.NEEDS_REVIEW.value   # triage gate
+    verification_status: str = VerificationStatus.UNVERIFIED.value  # corroboration level
+    name_source: Optional[str] = None                      # where employee_name came from
 
     @property
     def all_issues(self) -> list[Issue]:

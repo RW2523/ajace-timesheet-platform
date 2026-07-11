@@ -21,6 +21,10 @@ from ..schema import (ClientBreakdown, DayRecord, EmployeeMonth, Issue,
 from ..settings import Settings, get_settings
 from .calendar import build_calendar_days
 
+# verification levels ordered least->most trusted; a merged record takes the min
+_VS_RANK = {"unverified": 0, "voted": 1, "adopted_correction": 2,
+            "confirmed_vision_only": 2, "confirmed": 3}
+
 # trust by extractor / method (higher wins conflicts)
 _TRUST = {
     "daily_grid": 3.0, "weekly_totals": 3.0, "excel": 3.0, "csv": 3.0,
@@ -90,6 +94,19 @@ class EmployeeRegistry:
             source_files=_uniq([r.file for r in results]),
             extraction_methods=_uniq([r.method for r in results]),
         )
+        # corroboration level: carry the MOST CAUTIOUS verification across the
+        # contributing reads (a merged record is only as trusted as its weakest
+        # part). Left UNVERIFIED when no flow set one -> the validator derives it.
+        vs_vals = [r.verification for r in results if r.verification]
+        if vs_vals:
+            em.verification_status = min(vs_vals, key=lambda v: _VS_RANK.get(v, 0))
+        # name provenance: surface an unresolved worker name for review rather than
+        # silently shipping a blank or a filename guess.
+        em.name_source = "extracted" if name else "unresolved"
+        if not name:
+            em.issues.append(Issue(
+                code=IssueCode.UNATTRIBUTED, severity=IssueSeverity.INFO,
+                message="employee name could not be resolved from the document"))
         # a file whose own period disagrees with the requested month -> flag for
         # review (its hours may belong to a different month entirely).
         for msg in _uniq([r.period_mismatch for r in results if r.period_mismatch]):

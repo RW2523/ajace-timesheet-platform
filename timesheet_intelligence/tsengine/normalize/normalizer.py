@@ -92,6 +92,9 @@ class NormResult:
     # set when the file's own period (filename/content) disagrees with the
     # requested month; carries the human-readable reason for a review flag.
     period_mismatch: Optional[str] = None
+    # corroboration level (a VerificationStatus value); drives the validator's
+    # structural "no auto-accept unless CONFIRMED" rule. None = not set by a flow.
+    verification: Optional[str] = None
 
 
 def _norm(s) -> str:
@@ -818,6 +821,7 @@ def _strategy_email_approval(text: str, file: str, month: int, year: int
     res = NormResult(file=file, method="email_approval",
                      quality=ExtractionQuality.NATIVE, confidence=0.62)
     res.stated_total = float(total)
+    res.verification = "voted"                      # testimony -> never auto-accept
     res.notes.append(
         f"approval email states {total:g}h for the period -- treated as testimony "
         "(needs review, never auto-accepted)")

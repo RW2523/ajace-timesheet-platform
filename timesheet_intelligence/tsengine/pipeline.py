@@ -255,6 +255,7 @@ class TimesheetPipeline:
         if key_a is not None and self._printed_total_confirms(key_a, month, year):
             key_a.confidence = max(key_a.confidence, 0.9)
             key_a.needs_llm = False
+            key_a.verification = "confirmed"       # printed total = second key
             key_a.notes.append(
                 f"consensus $0 exit: deterministic sum matches the sheet's printed "
                 f"total ({key_a.stated_total:g}h)")
@@ -332,6 +333,7 @@ class TimesheetPipeline:
         if a_ok != b_ok:
             one = key_a if a_ok else key_b
             one.confidence = min(one.confidence, 0.7)
+            one.verification = one.verification or "unverified"
             one.notes.append("consensus: only one derivation available; unconfirmed")
             act("Consensus", "single",
                 f"one derivation only ({self._worked_total(one)[1]:g}h)", ok=False)
@@ -349,13 +351,18 @@ class TimesheetPipeline:
         # carrier = the richer read (more day detail); prefer deterministic on a tie
         richer = key_a if len(key_a.entries) >= len(key_b.entries) else key_b
 
-        if agree and ratio_ok and ceiling_ok and low_total_ok and not vision_only:
+        if agree and ratio_ok and ceiling_ok and low_total_ok:
+            # two keys agree + locks pass. If BOTH are vision reads it can only be
+            # CONFIRMED_VISION_ONLY (correlated errors) -> review, not auto-accept.
             richer.confidence = max(richer.confidence, 0.9)
             richer.needs_llm = False
+            richer.verification = "confirmed_vision_only" if vision_only else "confirmed"
+            tag = "CONFIRMED (vision-only)" if vision_only else "CONFIRMED"
             richer.notes.append(
-                f"consensus CONFIRMED: Key A {at:g}h and Key B {bt:g}h agree "
+                f"consensus {tag}: Key A {at:g}h and Key B {bt:g}h agree "
                 f"(<= {self.s.consensus_agree_tolerance:g}h)")
-            act("Consensus", "confirmed", f"A {at:g}h == B {bt:g}h")
+            act("Consensus", "confirmed",
+                f"A {at:g}h == B {bt:g}h{' (vision-only)' if vision_only else ''}")
             return richer
 
         # disagreement / lock trip -> keep the better-supported read for review.
@@ -369,6 +376,7 @@ class TimesheetPipeline:
         else:
             chosen = richer
         chosen.confidence = min(chosen.confidence, 0.65)      # -> needs_review
+        chosen.verification = "unverified"
         chosen.notes.append(
             f"consensus DISAGREEMENT: Key A {at:g}h vs Key B {bt:g}h; needs review")
         act("Consensus", "disagree", f"A {at:g}h vs B {bt:g}h", ok=False)

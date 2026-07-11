@@ -14,7 +14,7 @@ import datetime as _dt
 from ..llm.prompts import reconcile_messages
 from ..llm.router import ModelRouter
 from ..schema import (DayRecord, EmployeeMonth, Issue, IssueCode, IssueSeverity,
-                      ReviewStatus)
+                      ReviewStatus, VerificationStatus)
 from ..settings import Settings, get_settings
 
 
@@ -62,9 +62,25 @@ class Validator:
                            for i in issues)
         has_warning = any(i.severity == IssueSeverity.WARNING for i in issues)
         conf = em.confidence or 0.0
+        clean = not has_error and not has_warning \
+            and conf >= self.s.direct_autoaccept_confidence
+
+        # verification: a flow may have set it explicitly (the consensus two-key
+        # gate, an email vote). For flows that don't, DERIVE it -- a clean,
+        # confident read is treated as confirmed so legacy behaviour is preserved.
+        vs = em.verification_status
+        if vs in (None, VerificationStatus.UNVERIFIED.value) \
+                and em.flow != "consensus":
+            vs = (VerificationStatus.CONFIRMED.value if clean
+                  else VerificationStatus.UNVERIFIED.value)
+        em.verification_status = vs or VerificationStatus.UNVERIFIED.value
+
         if has_error or has_conflict or conf < 0.6:
             return ReviewStatus.BLOCKED.value
-        if has_warning or conf < self.s.direct_autoaccept_confidence:
+        # THE structural rule: nothing auto-accepts unless it is CONFIRMED.
+        if em.verification_status != VerificationStatus.CONFIRMED.value:
+            return ReviewStatus.NEEDS_REVIEW.value
+        if not clean:
             return ReviewStatus.NEEDS_REVIEW.value
         return ReviewStatus.AUTO_ACCEPTED.value
 

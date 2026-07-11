@@ -123,3 +123,85 @@ def test_process_consensus_dollar_zero_exit(monkeypatch):
     assert out and round(sum(e.total for e in out[0].entries), 1) == 160.0
     assert called["direct"] is False          # printed-total match -> no model call
     assert out[0].confidence >= 0.9
+
+
+# --- step 7: verification choke-point (no auto-accept unless CONFIRMED) ---- #
+from tsengine.schema import EmployeeMonth, Issue, IssueCode, IssueSeverity  # noqa: E402
+from tsengine.validate.validator import Validator  # noqa: E402
+
+
+def _em(flow="consensus", conf=0.9, verification="unverified", issues=()):
+    em = EmployeeMonth(employee_name="A", month=5, year=2026, monthly_total=160.0,
+                       days_worked=20, confidence=conf, flow=flow,
+                       verification_status=verification, name_source="extracted",
+                       issues=list(issues))
+    return em
+
+
+def _validate(em):
+    Validator(Settings(flow=em.flow, llm_policy="never"), None).validate(em)
+    return em.review_status
+
+
+def test_confirmed_two_key_auto_accepts():
+    assert _validate(_em(verification="confirmed", conf=0.9)) == "auto_accepted"
+
+
+def test_unverified_consensus_never_auto_accepts_even_high_conf():
+    # a disagreeing consensus read at high confidence must still go to review
+    assert _validate(_em(verification="unverified", conf=0.95)) == "needs_review"
+
+
+def test_vision_only_confirmed_is_not_auto_accepted():
+    # THE structural guard: two vision reads agreeing is CONFIRMED_VISION_ONLY,
+    # not CONFIRMED -> review, never a silent auto-accept.
+    assert _validate(_em(verification="confirmed_vision_only", conf=0.95)) == "needs_review"
+
+
+def test_email_vote_is_review_not_auto():
+    assert _validate(_em(verification="voted", conf=0.9)) == "needs_review"
+
+
+def test_legacy_flow_clean_read_still_auto_accepts():
+    # non-consensus flows derive CONFIRMED from a clean, confident read (back-compat)
+    assert _validate(_em(flow="premium", verification="unverified", conf=0.95)) \
+        == "auto_accepted"
+
+
+def test_legacy_flow_with_warning_needs_review():
+    warn = Issue(code=IssueCode.OUT_OF_RANGE, severity=IssueSeverity.WARNING,
+                 message="high")
+    assert _validate(_em(flow="premium", verification="unverified", conf=0.95,
+                         issues=[warn])) == "needs_review"
+
+
+def test_registry_carries_weakest_verification():
+    from tsengine.normalize.normalizer import NormResult
+    from tsengine.aggregate.registry import EmployeeRegistry
+    from tsengine.schema import ExtractionQuality as Q
+    import datetime as _dt
+    from tsengine.normalize.normalizer import DayEntry
+    # one confirmed file + one unverified file for the same person -> min = unverified
+    ents = [DayEntry(date=_dt.date(2026, 5, d), total=8.0) for d in range(1, 11)]
+    a = NormResult(file="a.xlsx", method="daily_grid", quality=Q.NATIVE,
+                   employee_name="Sam", entries=ents, confidence=0.9,
+                   verification="confirmed")
+    b = NormResult(file="b.pdf", method="direct:x", quality=Q.NATIVE,
+                   employee_name="Sam", entries=list(ents), confidence=0.7,
+                   verification="unverified")
+    em = EmployeeRegistry(Settings(flow="consensus")).build([a, b], 5, 2026)[0]
+    assert em.verification_status == "unverified"
+
+
+def test_registry_flags_unresolved_name():
+    from tsengine.normalize.normalizer import NormResult, DayEntry
+    from tsengine.aggregate.registry import EmployeeRegistry
+    from tsengine.schema import ExtractionQuality as Q
+    import datetime as _dt
+    r = NormResult(file="x.pdf", method="daily_grid", quality=Q.NATIVE,
+                   employee_name=None,
+                   entries=[DayEntry(date=_dt.date(2026, 5, 1), total=8.0)],
+                   confidence=0.9)
+    em = EmployeeRegistry().build([r], 5, 2026)[0]
+    assert em.name_source == "unresolved"
+    assert any(i.code.value == "UNATTRIBUTED" for i in em.all_issues)
