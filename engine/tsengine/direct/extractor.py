@@ -468,7 +468,9 @@ class DirectExtractor:
         try:
             with self.router._lock:
                 self.router.calls += 1
-            resp = self.client.chat(model, msgs, temperature=0.0, max_tokens=300,
+            # reasoning models (mini/gpt-5) burn part of the budget on reasoning
+            # tokens; 300 truncated the tiny verify JSON (finish_reason=length).
+            resp = self.client.chat(model, msgs, temperature=0.0, max_tokens=2000,
                                     json_mode=True)
             self.router._record(model, resp.usage)
             data = _loads_lenient(resp.text)
