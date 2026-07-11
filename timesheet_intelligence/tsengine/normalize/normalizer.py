@@ -16,8 +16,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from ..schema import (ExtractionQuality, Issue, IssueCode, IssueSeverity,
-                      RawExtraction, RawTable, SourceRef, WeeklyTotal)
+from ..schema import (ExtractionQuality, FileKind, Issue, IssueCode,
+                      IssueSeverity, RawExtraction, RawTable, SourceRef,
+                      WeeklyTotal)
 from ..settings import Settings, get_settings
 from . import dates as D
 from . import hours as H
@@ -768,6 +769,61 @@ def _strategy_ocr_totals(text: str, file: str, quality) -> Optional[NormResult]:
     return res
 
 
+# --- approval-email lane -------------------------------------------------- #
+_EMAIL_HDR_RE = re.compile(r"(?im)^\s*(from|sent|to|subject|date)\s*:")
+# an explicitly APPROVED / TOTAL hours figure stated in an email body
+_APPROVED_HOURS_RE = re.compile(
+    r"approv\w*\s+(?:for\s+)?(\d{1,3}(?:\.\d{1,2})?)\s*(?:hours|hrs)\b", re.I)
+_TOTAL_HOURS_RE = re.compile(r"total\s*hours?\W{0,8}?(\d{1,3}(?:\.\d{1,2})?)", re.I)
+_HOURS_FOR_MONTH_RE = re.compile(
+    r"(\d{1,3}(?:\.\d{1,2})?)\s*(?:hours|hrs)\s+for\s+(?:the\s+month\s+of\s+)?[A-Za-z]", re.I)
+
+
+def _email_like(kind, text: str) -> bool:
+    """Is this an email / approval message rather than a timesheet form?
+
+    True for a real .eml, or any document whose OCR/text carries email headers
+    (an emailed / forwarded approval saved as PDF)."""
+    if kind == FileKind.EMAIL:
+        return True
+    if not text:
+        return False
+    hdrs = len({m.group(1).lower() for m in _EMAIL_HDR_RE.finditer(text)})
+    if hdrs >= 2:
+        return True
+    low = text.lower()
+    return hdrs >= 1 and "approv" in low and ("hours" in low or "timesheet" in low)
+
+
+def _strategy_email_approval(text: str, file: str, month: int, year: int
+                             ) -> Optional[NormResult]:
+    """An approval email that STATES a total (e.g. 'Approved 160 Hours for May',
+    'Total Hours 160') with no attached grid. We take that figure as TESTIMONY:
+    emitted as stated_total at a review-band confidence, so it is surfaced for a
+    human to confirm and NEVER auto-accepted. Recovers legitimately-approved
+    months (Ravi/Fw_ 160) that the whole-file model read misses on an email."""
+    from collections import Counter
+    vals: list[float] = []
+    for pat in (_APPROVED_HOURS_RE, _TOTAL_HOURS_RE, _HOURS_FOR_MONTH_RE):
+        for m in pat.finditer(text or ""):
+            try:
+                v = round(float(m.group(1)), 2)
+            except (TypeError, ValueError):
+                continue
+            if 8 <= v <= 300:
+                vals.append(v)
+    if not vals:
+        return None
+    total = Counter(vals).most_common(1)[0][0]     # the most-stated figure
+    res = NormResult(file=file, method="email_approval",
+                     quality=ExtractionQuality.NATIVE, confidence=0.62)
+    res.stated_total = float(total)
+    res.notes.append(
+        f"approval email states {total:g}h for the period -- treated as testimony "
+        "(needs review, never auto-accepted)")
+    return res
+
+
 def _strategy_summary_total(tables, month: int, year: int) -> "Optional[NormResult]":
     """Pull a stated monthly total from a one-row summary table.
 
@@ -833,6 +889,17 @@ class Normalizer:
         if merged and (merged.entries or merged.weekly_totals) and not merged.needs_llm:
             self._attach_identity(merged, raw, client_hint, month, year)
             return [merged]
+
+        # APPROVAL EMAIL: an emailed/forwarded approval that only STATES a total
+        # (no attached grid). Take that figure as testimony -> needs_review. Runs
+        # only after the grid path failed, so a real attached timesheet still wins.
+        if _email_like(raw.kind, raw.text):
+            em = _strategy_email_approval(raw.text, raw.file, month, year)
+            if em is not None:
+                if merged and merged.entries:      # keep any partial attached grid
+                    em.entries = merged.entries
+                self._attach_identity(em, raw, client_hint, month, year)
+                return [em]
 
         # Safe text fallback for explicitly-labeled "<n> Hours" timecards.
         if raw.text:

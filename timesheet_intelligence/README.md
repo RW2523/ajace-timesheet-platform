@@ -408,6 +408,20 @@ upload via the admin AI-flow setting (`ai_flow=consensus`); it is not yet the
 default. The gate and `$0` exit are pure decision logic, unit-tested without any
 model call.
 
+### Approval-email lane
+
+Emailed / forwarded approvals — a real `.eml` or an email saved as PDF — often
+state a month total in the body ("Approved 160 Hours for May", "Total Hours 160")
+with no attached grid. The whole-file model read tends to miss these, and the
+deterministic grid strategies return nothing. `_strategy_email_approval`
+(`normalize/normalizer.py`, gated by `_email_like`: a real `.eml`, or text with
+≥2 mail headers) extracts the **most-stated** figure and emits it as
+`stated_total` at a review-band confidence (0.62) — **testimony**, surfaced for a
+human and never auto-accepted. It runs only after the grid path fails, so a real
+attached timesheet still wins. Recovered the Fw\_ `.eml` (0h → **160h**,
+needs_review). Wrong-month approvals are caught by the period resolver;
+implausibly small stated-only figures are caught by vote-validity.
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

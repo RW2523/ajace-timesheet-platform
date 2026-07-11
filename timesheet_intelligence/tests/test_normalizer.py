@@ -273,3 +273,40 @@ def test_vote_validity_keeps_multiweek_weekly_totals():
     r = _mk("weekly_totals", weekly=wk, conf=0.7)
     _apply_vote_validity(r, 5, 2026, _WKND)
     assert not r.needs_llm and r.confidence == 0.7
+
+
+# --- step 6: approval-email lane ------------------------------------------ #
+from tsengine.normalize.normalizer import (_email_like,           # noqa: E402
+                                           _strategy_email_approval)
+
+
+def test_email_like_detects_headers_and_eml():
+    body = "From: a@b.com\nSubject: Timesheet approval\nApproved 160 hours\n"
+    assert _email_like(FileKind.PDF_NATIVE, body)
+    assert _email_like(FileKind.EMAIL, "")               # a real .eml always
+    # a plain scanned timesheet is NOT an email even if it says "approved"
+    assert not _email_like(FileKind.PDF_SCANNED,
+                           "Approved FNMATSO1500615 04/19/2026 to 05/02/2026")
+
+
+def test_email_approval_extracts_stated_total_as_testimony():
+    text = ("Subject: Timesheet approval request for May 2026\n"
+            "From: Neeta\nApproved 160 Hours for May for Raviraj\n"
+            "Total Hours 160\n")
+    r = _strategy_email_approval(text, "fw.eml", 5, 2026)
+    assert r is not None and r.stated_total == 160.0
+    assert r.method == "email_approval"
+    assert 0.6 <= r.confidence < 0.85                     # review band, never auto
+    assert any("testimony" in n for n in r.notes)
+
+
+def test_email_approval_picks_the_most_stated_figure():
+    text = ("From: x\nSent: today\nApproved 160 hours\n"
+            "Total Hours 160\nsome noise 8 hours mentioned once\n")
+    r = _strategy_email_approval(text, "e.eml", 5, 2026)
+    assert r.stated_total == 160.0                        # 160 stated twice, not 8
+
+
+def test_email_approval_none_without_a_figure():
+    assert _strategy_email_approval("From: x\nSubject: hi\nno hours here\n",
+                                    "e.eml", 5, 2026) is None
