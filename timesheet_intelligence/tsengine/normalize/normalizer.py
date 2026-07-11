@@ -88,6 +88,9 @@ class NormResult:
     notes: list[str] = field(default_factory=list)
     confidence: float = 0.0
     needs_llm: bool = False
+    # set when the file's own period (filename/content) disagrees with the
+    # requested month; carries the human-readable reason for a review flag.
+    period_mismatch: Optional[str] = None
 
 
 def _norm(s) -> str:

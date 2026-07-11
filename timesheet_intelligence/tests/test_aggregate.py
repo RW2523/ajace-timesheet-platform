@@ -47,6 +47,10 @@ def test_duplicate_same_value_is_info_only():
 
 
 def test_weekly_only_prorated_into_month():
+    # week Apr 26 (Sun) .. May 2 (Sat), 35h. Work happens on the 5 workdays
+    # (Apr 27-30 + May 1) at 7h each; April keeps Apr 27-30 = 4 workdays = 28h.
+    # (The old calendar-day proration wrongly gave 35*5/7 = 25h by counting the
+    # Sunday too.)
     r = NormResult(file="w.csv", method="weekly_totals",
                    quality=ExtractionQuality.NATIVE, employee_name="Week Worker",
                    weekly_totals=[WeeklyTotal(
@@ -55,8 +59,37 @@ def test_weekly_only_prorated_into_month():
                        sources=[SourceRef(file="w.csv")])],
                    confidence=0.7)
     em = EmployeeRegistry().build([r], 4, 2026)[0]
-    assert round(em.monthly_total, 2) == 25.0     # 35 * 5/7
+    assert round(em.monthly_total, 2) == 28.0     # 35 * 4/5 workdays
     assert any(i.code.value == "WEEK_ONLY" for i in em.issues)
+
+
+def test_boundary_week_clipped_by_workday_not_calendar():
+    # A full 40h week straddling Apr/May reaching into May by ONE Friday (May 1)
+    # must contribute 8h to May, not 40*3/7 = 17.1h (calendar-day proration).
+    r = NormResult(file="w.csv", method="weekly_totals",
+                   quality=ExtractionQuality.NATIVE, employee_name="Straddle Sam",
+                   weekly_totals=[WeeklyTotal(
+                       week_start=dt.date(2026, 4, 27), week_end=dt.date(2026, 5, 3),
+                       total_hours=40.0, sources=[SourceRef(file="w.csv")])],
+                   confidence=0.7)
+    may = EmployeeRegistry().build([r], 5, 2026)[0]
+    assert round(may.monthly_total, 2) == 8.0     # only May 1 (Fri) is an in-May workday
+    apr = EmployeeRegistry().build([r], 4, 2026)[0]
+    assert round(apr.monthly_total, 2) == 32.0    # Apr 27-30 = 4 workdays * 8h
+
+
+def test_weekend_heavy_week_falls_back_to_full_spread():
+    # 84h in a Mon-Sun week can't fit in 5 workdays (<=16h/day) -> weekend work;
+    # spread over all 7 days so the in-month portion isn't under-counted.
+    r = NormResult(file="w.csv", method="weekly_totals",
+                   quality=ExtractionQuality.NATIVE, employee_name="Grinder",
+                   weekly_totals=[WeeklyTotal(
+                       week_start=dt.date(2026, 4, 27), week_end=dt.date(2026, 5, 3),
+                       total_hours=84.0, sources=[SourceRef(file="w.csv")])],
+                   confidence=0.7)
+    may = EmployeeRegistry().build([r], 5, 2026)[0]
+    # May 1,2,3 in-month -> 3/7 of 84 = 36h
+    assert round(may.monthly_total, 2) == 36.0
 
 
 def test_overlapping_weekly_sources_not_double_counted():

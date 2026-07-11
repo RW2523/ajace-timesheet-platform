@@ -14,6 +14,7 @@ import re
 from collections import defaultdict
 from typing import Optional
 
+from ..normalize import dates as D
 from ..normalize.normalizer import DayEntry, NormResult
 from ..schema import (ClientBreakdown, DayRecord, EmployeeMonth, Issue,
                       IssueCode, IssueSeverity, SourceRef, WeeklyTotal)
@@ -89,6 +90,12 @@ class EmployeeRegistry:
             source_files=_uniq([r.file for r in results]),
             extraction_methods=_uniq([r.method for r in results]),
         )
+        # a file whose own period disagrees with the requested month -> flag for
+        # review (its hours may belong to a different month entirely).
+        for msg in _uniq([r.period_mismatch for r in results if r.period_mismatch]):
+            em.issues.append(Issue(
+                code=IssueCode.PERIOD_MISMATCH, severity=IssueSeverity.WARNING,
+                message=msg))
         days = build_calendar_days(month, year, self.s)
         by_date = {d.date: d for d in days}
 
@@ -260,15 +267,20 @@ class EmployeeRegistry:
         covered: set[dt.date] = {d.date for d in days if d.has_data}
         used_weekly = 0
         for w in sorted(weekly, key=lambda w: w.week_start):
-            span = (w.week_end - w.week_start).days + 1
-            in_month = [w.week_start + dt.timedelta(days=k) for k in range(span)
-                        if (w.week_start + dt.timedelta(days=k)).month == em.month
-                        and (w.week_start + dt.timedelta(days=k)).year == em.year]
-            uncovered = [d for d in in_month if d not in covered]
-            if not uncovered:
-                continue   # this week's days are already counted -> skip (no double count)
-            frac = len(uncovered) / max(span, 1)
             wt = w.total_hours
+            # Clip the lump weekly total to its in-month, not-yet-counted portion
+            # by WORKDAY (Mon-Fri by default), never by calendar day: a 40h week
+            # straddling the boundary contributes 8h per in-month weekday, not
+            # 40*days/7. Weeks whose hours can't fit in workdays fall back to a
+            # 7-day spread so genuine weekend work is never lost.
+            basis_hours = wt if wt is not None else (w.regular_hours or w.overtime_hours)
+            clip = D.clip_weekly_to_month(
+                w.week_start, w.week_end, em.month, em.year,
+                hours=basis_hours, weekend=self.s.weekend_set,
+                max_per_day=self.s.max_hours_per_day, covered=covered)
+            if not clip.contributing_days:
+                continue   # this week's days are already counted -> skip (no double count)
+            frac = clip.fraction
             if wt is not None:
                 tot += wt * frac
             if w.regular_hours is not None:
@@ -277,9 +289,9 @@ class EmployeeRegistry:
                 reg += wt * frac
             if w.overtime_hours is not None:
                 ot += w.overtime_hours * frac
-            if wt is not None:                 # estimate worked days for weekly-only sources
-                worked += round(wt * frac / 8.0)
-            covered.update(uncovered)
+            # count the actual in-month WORKDAYS this week contributes
+            worked += clip.worked_days
+            covered.update(clip.contributing_days)
             used_weekly += 1
         if weekly:
             em.issues.append(Issue(

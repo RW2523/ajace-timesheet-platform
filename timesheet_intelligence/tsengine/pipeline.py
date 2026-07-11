@@ -21,6 +21,7 @@ from typing import Optional
 
 from .aggregate.registry import EmployeeRegistry
 from .llm.router import ModelRouter
+from .normalize import dates as D
 from .normalize.llm_normalizer import LLMNormalizer
 from .normalize.normalizer import NormResult, Normalizer
 from .orchestrator import Orchestrator
@@ -196,6 +197,17 @@ class TimesheetPipeline:
                 reason="direct extraction: not a timesheet or unreadable"))
             done("DirectReader")
             return None
+        # period sanity: filename + the dates the model actually returned
+        try:
+            entry_dates = [e.date for r in results for e in r.entries if e.date]
+            pr = D.resolve_target_period(month, year, filename=Path(rel).name,
+                                         sheet_dates=entry_dates)
+            if pr.mismatch:
+                for r in results:
+                    r.period_mismatch = pr.note
+                act("PeriodResolver", "period_mismatch", pr.note or pr.status, ok=False)
+        except Exception as exc:
+            log.debug("period resolver (direct) failed for %s: %s", rel, exc)
         done(self._agent_for(results[0].method))
         return results
 
@@ -259,6 +271,11 @@ class TimesheetPipeline:
                 f"{res.method}, conf {res.confidence:.2f}, {len(res.entries)} entries"
                 + (", needs_llm" if res.needs_llm else ""))
 
+        # PERIOD RESOLVER: reconcile the requested month against the filename and
+        # the file's own dates (2-of-3 majority). A confident disagreement is
+        # flagged for review so a wrong-month file can't silently pollute totals.
+        self._resolve_period(rel, raw, results, month, year, act)
+
         # decide on LLM escalation
         for i, res in enumerate(results):
             if self._should_escalate(res):
@@ -300,6 +317,36 @@ class TimesheetPipeline:
 
         done(self._agent_for(results[0].method) if results else "Normalizer")
         return results
+
+    def _resolve_period(self, rel, raw, results, month, year, act) -> None:
+        """Tag results whose own period disagrees with the requested month.
+
+        Signals: the requested month, the filename month, and the dominant
+        in-document date month. On a confident mismatch every result carries a
+        note that the registry turns into a PERIOD_MISMATCH review flag. We never
+        silently reprocess under a different month here -- the number stays tied
+        to the requested period and is surfaced for a human to reroute.
+        """
+        try:
+            blob = raw.text or ""
+            if raw.tables:
+                blob += "\n" + "\n".join(
+                    " ".join("" if c is None else str(c) for c in row)
+                    for t in raw.tables for row in t.rows)
+            order = D.infer_date_order([blob], month, year)
+            sheet_dates = D.collect_dates(blob, order, year)
+            pr = D.resolve_target_period(month, year, filename=Path(rel).name,
+                                         sheet_dates=sheet_dates)
+        except Exception as exc:                       # never let this abort a file
+            log.debug("period resolver failed for %s: %s", rel, exc)
+            return
+        if pr.mismatch:
+            for res in results:
+                res.period_mismatch = pr.note
+            act("PeriodResolver", "period_mismatch",
+                pr.note or pr.status, ok=False)
+        else:
+            act("PeriodResolver", "period_confirmed", f"{pr.year}-{pr.month:02d}")
 
     def _premium_plus_vision(self, path, rel, month, year, client_hint, det,
                              current, act):

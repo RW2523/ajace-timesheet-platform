@@ -297,6 +297,30 @@ A full run over a heterogeneous May folder (70 files, 6 clients) drove these:
   would resolve a file correctly. Flip on once `normalize/` table-selection +
   confidence-gating is tuned and validated against live LLM. Install: `pip install docling`.
 
+### Month-boundary clipping & period resolution (all flows, all months)
+
+Two generic, deterministic (`$0`, no model) fixes for the biggest cross-month
+error class — weeks that straddle a month boundary and files filed under the
+wrong month. Both are month-agnostic: they take the target `(month, year)` and
+work for any period.
+
+- **Workday-weighted weekly clip.** A lump weekly total that straddles the
+  boundary is now attributed by **workday**, not calendar day. A 40h week
+  spanning `Apr 27–May 3` contributes **8h** to May (only May 1, a weekday), not
+  the old `40 × 3/7 = 17.1h`. If the hours can't fit in the week's workdays
+  (`>max_hours_per_day` each → weekend work), it falls back to a 7-day spread so a
+  genuine 6/7-day week is never under-counted. Honors the configurable
+  `weekend_days`. (`normalize/dates.py:clip_weekly_to_month`, applied in
+  `aggregate/registry.py:_rollup`.)
+- **2-of-3 period resolver.** Three signals vote on the period a file really
+  covers — the requested month, the **filename** month (`TS May-2026`,
+  `4.30.26`, `…20260529`), and the **dominant in-document date**. Majority wins;
+  a lone dissenter is noted; a genuine disagreement raises a `PERIOD_MISMATCH`
+  warning → **needs_review** (never a silent wrong-month total). When filename
+  **and** content agree on a different month than requested (e.g. an April sheet
+  dropped into the May run), it's surfaced as a remap candidate.
+  (`normalize/dates.py:resolve_target_period`, wired in `pipeline.py`.)
+
 ## Two processing flows (v1.1)
 
 Set `TSE_FLOW=budget|premium` (default `premium`). Both share the same

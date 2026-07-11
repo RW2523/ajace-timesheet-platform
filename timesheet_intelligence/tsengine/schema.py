@@ -93,6 +93,7 @@ class IssueCode(str, Enum):
     CONFLICT = "CONFLICT"              # same day reported with different values
     OUT_OF_RANGE = "OUT_OF_RANGE"      # hours outside sane bounds
     CROSS_MONTH = "CROSS_MONTH"        # source period spans outside target month
+    PERIOD_MISMATCH = "PERIOD_MISMATCH"  # file's own period disagrees with the requested month
     WEEK_ONLY = "WEEK_ONLY"            # only weekly totals available, no daily split
     TOTAL_MISMATCH = "TOTAL_MISMATCH"  # stated total != sum of parts
     NEEDS_LLM = "NEEDS_LLM"            # deterministic path insufficient; LLM/vision recommended
