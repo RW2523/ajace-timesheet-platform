@@ -184,11 +184,25 @@ class DirectExtractor:
         return [best]
 
     # -- blind verification pass ---------------------------------------------
+    def _verify_model_for(self, best: NormResult) -> str:
+        """A verify model in a DIFFERENT family than the read being checked, so the
+        two don't share a bias and 'agree' on the same mistake (the false-confirm
+        seen on biweekly/stray-row files). If the configured verify model is the
+        one that produced this read, decorrelate with a stronger/other model."""
+        best_model = (best.method or "").split(":", 1)[-1]
+        vm = self.s.direct_verify_model
+        if vm != best_model:
+            return vm
+        for alt in (self.s.consensus_tiebreak_ladder + [self.s.direct_fallback2_model]):
+            if alt and alt != best_model:
+                return alt
+        return vm
+
     def _verify(self, best: NormResult, primary_total: float, pdf: Optional[Path],
                 images: list[Path], month: int, year: int, act: Callable) -> None:
         from ..llm.client import _loads_lenient
         from ..llm.prompts import direct_verify_system
-        model = self.s.direct_verify_model
+        model = self._verify_model_for(best)
         msgs = [{"role": "system", "content": direct_verify_system(month, year)},
                 self.client.file_message("Give the verification JSON now.",
                                          file_path=pdf, images=images)]

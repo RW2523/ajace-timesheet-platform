@@ -121,8 +121,12 @@ class Settings(BaseSettings):
     # advanced direct: a cheap BLIND second read that re-derives just the monthly
     # total. Agreement -> confirmed (auto-accept eligible); disagreement -> flag
     # for review. Catches a confident-but-wrong single read for ~one cheap call.
+    # CROSS-FAMILY vs the nano primary: a different model decorrelates the error
+    # so the two reads don't "agree" on the same mistake (the false-confirm the
+    # live May run exposed on biweekly/stray-row files). Mini is the cheapest
+    # decorrelated option; set to google/gemini-2.5-pro for maximum decorrelation.
     direct_verify: bool = True
-    direct_verify_model: str = "openai/gpt-5.4-nano"
+    direct_verify_model: str = "openai/gpt-5.4-mini"
 
     use_local_llm: str = "auto"              # auto (= on in budget flow) | on | off
     local_llm_base_url: str = "http://localhost:11434"
