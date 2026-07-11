@@ -403,10 +403,15 @@ number auto-accepts (`pipeline.py:_process_consensus`):
    Disagreement or a lock trip keeps the better-supported read at low confidence →
    **needs_review** (the cross-family tiebreak ladder is a later step).
 
-The read is blind by construction — Key B never sees Key A's number. Enable per
-upload via the admin AI-flow setting (`ai_flow=consensus`); it is not yet the
-default. The gate and `$0` exit are pure decision logic, unit-tested without any
-model call.
+The read is blind by construction — Key B never sees Key A's number. It is the
+code-level default (route.js fallback + a "🎯 Consensus" option in the admin flow
+picker); the live production switch is the `ai_flow` setting. The gate and `$0`
+exit are pure decision logic, unit-tested without any model call.
+
+**Reserved — cross-family tiebreak (S5/S6).** Disagreements route to review
+today. The escalation ladder (a decorrelated gemini read, then gpt-5, then a
+hard-capped opus arbiter — `consensus_tiebreak_models`, `opus_budget_per_run`) is
+configured but not yet wired into the gate; it is the next phase.
 
 ### Approval-email lane
 

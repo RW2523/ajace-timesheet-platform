@@ -83,6 +83,22 @@ class Settings(BaseSettings):
     consensus_low_total_h: float = 60.0       # below this needs day-level evidence in BOTH keys
     consensus_ratio_veto: float = 0.6         # a candidate < this * another can't win
     consensus_ceiling_h: float = 230.0        # above this never auto-accepts
+    # cross-family tiebreak ladder (S5/S6). Reserved: not yet wired into the gate
+    # -- disagreements route to review today -- but configurable for when the
+    # escalation phase lands (gemini decorrelates from the GPT Key B; then gpt-5;
+    # then a hard-capped opus arbiter).
+    consensus_tiebreak_models: str = "google/gemini-2.5-pro,openai/gpt-5"
+    opus_budget_per_run: int = 4              # hard cap on claude-opus arbiter calls per batch
+
+    @property
+    def consensus_tiebreak_ladder(self) -> list[str]:
+        seen, out = set(), []
+        for m in self.consensus_tiebreak_models.split(","):
+            m = m.strip()
+            if m and m not in seen:
+                seen.add(m)
+                out.append(m)
+        return out
 
     @property
     def consensus_key_b_ladder(self) -> list[str]:

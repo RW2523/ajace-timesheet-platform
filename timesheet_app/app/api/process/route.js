@@ -27,9 +27,11 @@ export async function POST(request) {
     return NextResponse.json({ error: "file, month, year required" }, { status: 400 });
   }
 
-  // Admin-chosen AI flow: "direct" = whole file to the GPT-5.4 ladder (default),
-  // "premium" = parse + gpt-4o-mini + gemini, "budget" = free local model first.
-  let flow = "premium_plus";
+  // Admin-chosen AI flow. "consensus" = two independent agreeing derivations
+  // (deterministic Key A + blind model Key B) with a $0 printed-total exit;
+  // "premium_plus"/"premium"/"direct"/"budget" as before. The admin setting wins;
+  // this is only the fallback when no row exists.
+  let flow = "consensus";
   try {
     const { data: fs } = await supabase
       .from("ts_app_settings").select("value").eq("key", "ai_flow").single();
