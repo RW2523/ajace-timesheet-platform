@@ -82,6 +82,7 @@ export default function DashboardClient({ profile }) {
   async function onPickFile(f) {
     if (!f) return;
     setFile(f);
+    storedRef.current = null;      // new file -> needs its own storage upload
     setPreviewPages([]);
     dropPreviewDoc();
     const kind = docKind(f.name);
@@ -99,12 +100,26 @@ export default function DashboardClient({ profile }) {
       const res = await fetch("/api/preview", { method: "POST", body: fd });
       const data = await res.json();
       if (res.ok && data.pages?.length) setPreviewPages(data.pages);
-      else setPreviewDoc({ kind: "other" });
+      else setPreviewDoc(data?.doc || { kind: "other" });
     } catch {
       setPreviewDoc({ kind: "other" });
     } finally {
       setPreviewLoading(false);
     }
+  }
+
+  // ---------- source-document storage (once per picked file, every path) ----
+  const storedRef = useRef(null); // { fileName, path } for the current file
+  async function ensureStored(f) {
+    if (!f) return null;
+    if (storedRef.current?.fileName === f.name) return storedRef.current.path;
+    const ext = f.name.includes(".") ? f.name.split(".").pop() : "bin";
+    const path = `${uid}/${year}-${String(month).padStart(2, "0")}/${Date.now()}.${ext}`;
+    await supabase.storage.from("ts-uploads").upload(path, f, {
+      contentType: f.type || "application/octet-stream", upsert: true,
+    });
+    storedRef.current = { fileName: f.name, path };
+    return path;
   }
 
   // ---------- AI processing ----------
@@ -114,12 +129,8 @@ export default function DashboardClient({ profile }) {
     setProcessError("");
     let storagePath = null;
     try {
-      // 1) keep the source in storage
-      const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
-      storagePath = `${uid}/${year}-${String(month).padStart(2, "0")}/${Date.now()}.${ext}`;
-      await supabase.storage.from("ts-uploads").upload(storagePath, file, {
-        contentType: file.type || "application/octet-stream", upsert: true,
-      });
+      // 1) keep the source in storage (memoized -- never re-uploads)
+      storagePath = await ensureStored(file);
 
       // 2) run the engine
       const fd = new FormData();
@@ -178,15 +189,14 @@ export default function DashboardClient({ profile }) {
 
   async function startManual() {
     const emptyCal = buildCalendar(null, month, year);
-    // when AI is off but a file was attached, still keep it in storage + record it
-    if (file && !AI_ENABLED) {
+    // a file was attached: ALWAYS keep it in storage + record it, so the admin
+    // can cross-verify the submission against the original document -- manual
+    // entry included (previously only when AI was disabled, which left admins
+    // with nothing to preview for manual submissions).
+    if (file) {
       try {
-        const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
-        const storagePath = `${uid}/${year}-${String(month).padStart(2, "0")}/${Date.now()}.${ext}`;
-        await supabase.storage.from("ts-uploads").upload(storagePath, file, {
-          contentType: file.type || "application/octet-stream", upsert: true,
-        });
-        await saveBaseline({ cal: emptyCal, emp: null, storagePath, file, aiStatus: "failed", confidence: null });
+        const storagePath = await ensureStored(file);
+        await saveBaseline({ cal: emptyCal, emp: null, storagePath, file, aiStatus: "manual", confidence: null });
       } catch { /* non-fatal: proceed to manual entry regardless */ }
     }
     setCalendar(emptyCal);
@@ -277,6 +287,7 @@ export default function DashboardClient({ profile }) {
   function resetForNew() {
     setMode("upload"); setFile(null); setPreviewPages([]); setShowPreview(false);
     dropPreviewDoc();
+    storedRef.current = null;
     setCalendar([]); setQ({}); setHolidayWork({}); setAiMeta(null);
     setProcessError(""); setSavedMsg(""); setTimesheetId(null);
     setJustSubmitted(false);
