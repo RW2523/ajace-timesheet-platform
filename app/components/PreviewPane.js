@@ -1,9 +1,21 @@
 "use client";
 import { useState } from "react";
 
-export default function PreviewPane({ pages, loading, fileName, onClose }) {
+// Renders the source document beside the form so the user can cross-verify.
+// Two modes:
+//   pages — engine-rendered PNGs (any format; needs the Python engine)
+//   doc   — browser-native rendering: { url, kind: "pdf" | "image" | "other" }
+//           PDFs use the browser's built-in viewer, images render directly.
+//           "other" (Excel/Word without an engine) shows a friendly notice.
+export default function PreviewPane({ pages, doc, loading, fileName, onClose }) {
   const [zoom, setZoom] = useState(1);
   const clamp = (z) => Math.min(4, Math.max(0.4, z));
+
+  const hasPages = pages && pages.length > 0;
+  const isPdf = !hasPages && doc?.kind === "pdf" && doc?.url;
+  const isImage = !hasPages && doc?.kind === "image" && doc?.url;
+  const isOther = !hasPages && doc && !isPdf && !isImage;
+  const zoomable = hasPages || isImage; // PDFs zoom via the browser's own viewer
 
   return (
     <div className="pv">
@@ -12,12 +24,19 @@ export default function PreviewPane({ pages, loading, fileName, onClose }) {
           {fileName || "Source preview"}
         </span>
         <div className="row" style={{ gap: 4 }}>
-          <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 0.8))} title="Zoom out">−</button>
-          <span className="muted" style={{ fontSize: 11, minWidth: 38, textAlign: "center" }}>
-            {Math.round(zoom * 100)}%
-          </span>
-          <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 1.25))} title="Zoom in">+</button>
-          <button className="btn btn-ghost btn-sm" onClick={() => setZoom(1)} title="Fit width">⤢</button>
+          {zoomable && (
+            <>
+              <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 0.8))} title="Zoom out">−</button>
+              <span className="muted" style={{ fontSize: 11, minWidth: 38, textAlign: "center" }}>
+                {Math.round(zoom * 100)}%
+              </span>
+              <button className="btn btn-ghost btn-sm" onClick={() => setZoom((z) => clamp(z * 1.25))} title="Zoom in">+</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setZoom(1)} title="Fit width">⤢</button>
+            </>
+          )}
+          {doc?.url && (
+            <a className="btn btn-ghost btn-sm" href={doc.url} target="_blank" rel="noreferrer" title="Open in a new tab">↗</a>
+          )}
           {onClose && <button className="btn btn-ghost btn-sm" onClick={onClose} title="Close">×</button>}
         </div>
       </div>
@@ -27,13 +46,32 @@ export default function PreviewPane({ pages, loading, fileName, onClose }) {
             <span className="spinner" style={{ marginRight: 8 }} /> Rendering preview…
           </div>
         )}
-        {!loading && (!pages || pages.length === 0) && (
+        {!loading && isPdf && (
+          <iframe className="pv-frame" src={doc.url} title={fileName || "document"} />
+        )}
+        {!loading && isImage && <img src={doc.url} alt={fileName || "document"} />}
+        {!loading && isOther && (
+          <div className="pv-note">
+            <div style={{ fontSize: 26 }}>📊</div>
+            <b>No in-browser preview for this file type.</b>
+            <span>
+              Spreadsheets and Word files can’t be rendered here
+              {doc?.url ? " — open the original instead." : "."}
+            </span>
+            {doc?.url && (
+              <a className="btn btn-ghost btn-sm" href={doc.url} target="_blank" rel="noreferrer">
+                Open original ↗
+              </a>
+            )}
+          </div>
+        )}
+        {!loading && !hasPages && !doc && (
           <div style={{ color: "#cbd5e1", textAlign: "center", padding: 30, fontSize: 13 }}>
             No preview available.
           </div>
         )}
-        {!loading &&
-          pages?.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
+        {!loading && hasPages &&
+          pages.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
       </div>
     </div>
   );

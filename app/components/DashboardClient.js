@@ -27,9 +27,11 @@ export default function DashboardClient({ profile }) {
   const [mode, setMode] = useState("upload"); // upload | review
   const [file, setFile] = useState(null);
   const [previewPages, setPreviewPages] = useState([]);
+  const [previewDoc, setPreviewDoc] = useState(null); // browser-native preview
   const [previewLoading, setPreviewLoading] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
   const [drag, setDrag] = useState(false);
+  const [justSubmitted, setJustSubmitted] = useState(false);
 
   const [processing, setProcessing] = useState(false);
   const [processError, setProcessError] = useState("");
@@ -60,21 +62,46 @@ export default function DashboardClient({ profile }) {
   const setField = (k) => (e) => setFields({ ...fields, [k]: e.target.value });
 
   // ---------- file selection + preview ----------
+  // PDFs and images render natively in the browser (no server round-trip at
+  // all); Office files fall back to the engine's page renderer when one is
+  // configured, else a friendly "open the original" notice.
+  const IMG_EXTS = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
+  function docKind(name) {
+    const ext = (name || "").split(".").pop().toLowerCase();
+    if (ext === "pdf") return "pdf";
+    if (IMG_EXTS.includes(ext)) return "image";
+    return "other";
+  }
+  function dropPreviewDoc() {
+    setPreviewDoc((d) => {
+      if (d?.url?.startsWith("blob:")) URL.revokeObjectURL(d.url);
+      return null;
+    });
+  }
+
   async function onPickFile(f) {
     if (!f) return;
     setFile(f);
-    if (!AI_ENABLED) return;          // no engine -> skip the rendered preview
+    setPreviewPages([]);
+    dropPreviewDoc();
+    const kind = docKind(f.name);
+    if (kind === "pdf" || kind === "image") {
+      setPreviewDoc({ url: URL.createObjectURL(f), kind });
+      setShowPreview(true);
+      return;                          // browser renders it -- no server needed
+    }
+    // Office/CSV: only the engine can render pages; try it, degrade gracefully.
     setShowPreview(true);
     setPreviewLoading(true);
-    setPreviewPages([]);
     try {
       const fd = new FormData();
       fd.append("file", f);
       const res = await fetch("/api/preview", { method: "POST", body: fd });
       const data = await res.json();
-      setPreviewPages(data.pages || []);
+      if (res.ok && data.pages?.length) setPreviewPages(data.pages);
+      else setPreviewDoc({ kind: "other" });
     } catch {
-      setPreviewPages([]);
+      setPreviewDoc({ kind: "other" });
     } finally {
       setPreviewLoading(false);
     }
@@ -239,6 +266,7 @@ export default function DashboardClient({ profile }) {
         validation: { errors: validation.errors, warnings: validation.warnings },
       }).eq("id", tid);
       setSavedMsg("Timesheet submitted ✓  Your manager can now review it.");
+      setJustSubmitted(true);
     } catch (e) {
       setProcessError(String(e.message || e));
     } finally {
@@ -248,8 +276,10 @@ export default function DashboardClient({ profile }) {
 
   function resetForNew() {
     setMode("upload"); setFile(null); setPreviewPages([]); setShowPreview(false);
+    dropPreviewDoc();
     setCalendar([]); setQ({}); setHolidayWork({}); setAiMeta(null);
     setProcessError(""); setSavedMsg(""); setTimesheetId(null);
+    setJustSubmitted(false);
   }
 
   // ---------- render ----------
@@ -282,7 +312,7 @@ export default function DashboardClient({ profile }) {
             file={file} drag={drag} setDrag={setDrag} fileInput={fileInput}
             onPickFile={onPickFile} processing={processing} processAI={processAI}
             startManual={startManual} processError={processError}
-            previewPages={previewPages} previewLoading={previewLoading}
+            previewPages={previewPages} previewDoc={previewDoc} previewLoading={previewLoading}
             aiEnabled={AI_ENABLED}
           />
         )}
@@ -293,13 +323,22 @@ export default function DashboardClient({ profile }) {
             onDayClick={setDayIdx} validation={validation} totals={totals}
             q={q} setQ={setQ} holidays={holidays} holidayWork={holidayWork} setHolidayWork={setHolidayWork}
             aiMeta={aiMeta} saving={saving} submit={submit}
-            showPreview={showPreview && previewPages.length > 0}
-            previewPages={previewPages} previewLoading={previewLoading}
+            showPreview={showPreview && (previewPages.length > 0 || !!previewDoc)}
+            previewPages={previewPages} previewDoc={previewDoc} previewLoading={previewLoading}
             fileName={file?.name} togglePreview={() => setShowPreview((s) => !s)}
             resetForNew={resetForNew}
           />
         )}
       </div>
+
+      {justSubmitted && (
+        <SubmitSuccess
+          period={periodLabel(month, year)}
+          totals={rollup(calendar)}
+          onClose={() => setJustSubmitted(false)}
+          onNew={resetForNew}
+        />
+      )}
 
       {dayIdx != null && (
         <DayModal
@@ -318,7 +357,7 @@ export default function DashboardClient({ profile }) {
 }
 
 // ---------------- upload step ----------------
-function UploadStep({ file, drag, setDrag, fileInput, onPickFile, processing, processAI, startManual, processError, previewPages, previewLoading, aiEnabled }) {
+function UploadStep({ file, drag, setDrag, fileInput, onPickFile, processing, processAI, startManual, processError, previewPages, previewDoc, previewLoading, aiEnabled }) {
   const card = (
     <div className="card card-pad">
       <h3 className="card-title">{aiEnabled ? "1 · Upload your timesheet" : "Your timesheet"}</h3>
@@ -366,12 +405,12 @@ function UploadStep({ file, drag, setDrag, fileInput, onPickFile, processing, pr
     </div>
   );
 
-  // with AI, show the live source preview beside the uploader; without, single column
-  if (aiEnabled && file) {
+  // once a file is picked, show the live source preview beside the uploader
+  if (file && (previewPages.length > 0 || previewDoc || previewLoading)) {
     return (
       <div className="split">
         <div className="stack">{card}</div>
-        <PreviewPane pages={previewPages} loading={previewLoading} fileName={file.name} />
+        <PreviewPane pages={previewPages} doc={previewDoc} loading={previewLoading} fileName={file.name} />
       </div>
     );
   }
@@ -382,7 +421,7 @@ function UploadStep({ file, drag, setDrag, fileInput, onPickFile, processing, pr
 function ReviewStep({
   fields, setField, calendar, month, year, onDayClick, validation, totals,
   q, setQ, holidays, holidayWork, setHolidayWork, aiMeta, saving, submit,
-  showPreview, previewPages, previewLoading, fileName, togglePreview, resetForNew,
+  showPreview, previewPages, previewDoc, previewLoading, fileName, togglePreview, resetForNew,
 }) {
   const left = (
     <div className="stack">
@@ -442,7 +481,7 @@ function ReviewStep({
         <div className="between" style={{ marginBottom: 10 }}>
           <h3 className="card-title" style={{ margin: 0 }}>Calendar — click any day to edit</h3>
           <div className="row" style={{ gap: 8 }}>
-            {previewPages.length > 0 && (
+            {(previewPages.length > 0 || previewDoc) && (
               <button className="btn btn-ghost btn-sm" onClick={togglePreview}>
                 {showPreview ? "Hide source" : "📄 Show source"}
               </button>
@@ -476,11 +515,41 @@ function ReviewStep({
     return (
       <div className="split">
         {left}
-        <PreviewPane pages={previewPages} loading={previewLoading} fileName={fileName} onClose={togglePreview} />
+        <PreviewPane pages={previewPages} doc={previewDoc} loading={previewLoading} fileName={fileName} onClose={togglePreview} />
       </div>
     );
   }
   return left;
+}
+
+// ---------------- submitted! ----------------
+function SubmitSuccess({ period, totals, onClose, onNew }) {
+  return (
+    <div className="modal-bg" onClick={onClose}>
+      <div className="modal success-card" onClick={(e) => e.stopPropagation()}>
+        <div className="success-check" aria-hidden>✓</div>
+        <h2 style={{ margin: "14px 0 4px" }}>Timesheet submitted!</h2>
+        <p className="muted" style={{ margin: 0 }}>
+          Your <b>{period}</b> timesheet is in. Your manager can now review it.
+        </p>
+        <div className="tiles" style={{ margin: "18px 0 6px" }}>
+          <div className="tile tot"><div className="v">{totals.total}</div><div className="l">Total hrs</div></div>
+          <div className="tile reg"><div className="v">{totals.regular}</div><div className="l">Regular</div></div>
+          <div className="tile ot"><div className="v">{totals.overtime}</div><div className="l">Overtime</div></div>
+          <div className="tile"><div className="v">{totals.daysWorked}</div><div className="l">Days</div></div>
+        </div>
+        <p className="muted" style={{ fontSize: 12, margin: "0 0 16px" }}>
+          What happens next: an admin reviews your submission — you’ll be contacted
+          only if something needs a correction. You can still reopen and edit it
+          before it’s approved.
+        </p>
+        <div className="row" style={{ justifyContent: "center", gap: 10 }}>
+          <button className="btn btn-ghost" onClick={onNew}>Start another month</button>
+          <button className="btn btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Field({ label, children }) {

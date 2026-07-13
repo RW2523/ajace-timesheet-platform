@@ -29,13 +29,29 @@ export async function POST(request) {
   const path = body?.path;
   if (!path) return NextResponse.json({ error: "path required" }, { status: 400 });
 
+  const fileName = path.split("/").pop() || "document";
+  const ext = fileName.split(".").pop().toLowerCase();
+  const IMG = ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tif", "tiff"];
+  const kind = ext === "pdf" ? "pdf" : IMG.includes(ext) ? "image" : "other";
+
+  // PDFs and images render natively in the browser -- hand back a short-lived
+  // signed URL instead of engine-rendered PNGs (works with no engine at all).
+  // Office files still need the engine's renderer; without one, return the
+  // signed URL as a download so the admin can open the original.
+  if (kind !== "other" || !process.env.ENGINE_URL) {
+    const { data: signed, error: serr } = await supabase.storage
+      .from("ts-uploads").createSignedUrl(path, 600);
+    if (serr || !signed?.signedUrl) {
+      return NextResponse.json({ error: "file not found in storage" }, { status: 404 });
+    }
+    return NextResponse.json({ doc: { url: signed.signedUrl, kind, fileName } });
+  }
+
   const { data: blob, error } = await supabase.storage.from("ts-uploads").download(path);
   if (error || !blob) {
     return NextResponse.json({ error: "file not found in storage" }, { status: 404 });
   }
-
   try {
-    const fileName = path.split("/").pop() || "document";
     const result = await previewUpload(blob, fileName);
     return NextResponse.json(result);
   } catch (e) {

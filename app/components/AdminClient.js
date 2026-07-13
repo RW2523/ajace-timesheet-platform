@@ -390,6 +390,7 @@ function AgentTrace({ trace, flow }) {
 // the submission detail so an admin can verify against the original side-by-side.
 function DocPreviewPanel({ supabase, path, fileName, onClose }) {
   const [pages, setPages] = useState([]);
+  const [doc, setDoc] = useState(null);   // { url, kind } browser-native preview
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
   const [zoom, setZoom] = useState(1);
@@ -405,7 +406,9 @@ function DocPreviewPanel({ supabase, path, fileName, onClose }) {
         });
         const d = await res.json();
         if (!res.ok) throw new Error(d.error || "preview failed");
-        if (active) setPages(d.pages || []);
+        if (!active) return;
+        if (d.doc) setDoc(d.doc);
+        else setPages(d.pages || []);
       } catch (e) {
         if (active) setErr(String(e.message || e));
       } finally {
@@ -447,7 +450,21 @@ function DocPreviewPanel({ supabase, path, fileName, onClose }) {
               <a className="src-link" onClick={openOriginal} role="button" style={{ color: "#93c5fd" }}>Open the original ↗</a>
             </div>
           )}
-          {!loading && !err && pages.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
+          {!loading && !err && doc?.kind === "pdf" && (
+            <iframe className="pv-frame" src={doc.url} title={fileName || "document"} />
+          )}
+          {!loading && !err && doc?.kind === "image" && (
+            <img src={doc.url} alt={fileName || "document"} />
+          )}
+          {!loading && !err && doc && doc.kind !== "pdf" && doc.kind !== "image" && (
+            <div className="pv-note">
+              <div style={{ fontSize: 26 }}>📊</div>
+              <b>No in-browser preview for this file type.</b>
+              <span>Spreadsheets and Word files can’t be rendered here — open the original instead.</span>
+              <a className="btn btn-ghost btn-sm" onClick={openOriginal} role="button">Open original ↗</a>
+            </div>
+          )}
+          {!loading && !err && !doc && pages.map((src, i) => <img key={i} src={src} alt={`page ${i + 1}`} />)}
         </div>
       </div>
   );
