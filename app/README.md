@@ -87,17 +87,35 @@ npm run dev          # http://localhost:3009
 No hosting provider is wired into the repo — deploy the Next.js app to any host
 you like (set the project **root directory to `app/`**).
 
-**The app host does not run the Python AI engine.** The engine shells out to
-`tesseract` / `LibreOffice` and uses heavy native libs with long runtimes, which
-serverless functions don't support. So:
+Two ways to get AI processing:
 
-- **App only** (no engine): auth, signup, the **manual** timesheet flow, edit,
-  questionnaire, US-holidays, validation, submit, and the admin console all work.
-  The "Process with AI" upload is hidden (`NEXT_PUBLIC_AI_ENABLED` unset → off).
-- **To enable AI**: host the engine separately (any Docker host), then set on the
-  app deployment:
-  - `NEXT_PUBLIC_AI_ENABLED=true`
-  - `ENGINE_URL=https://your-engine-host`
+### 1. Serverless Direct++ — no engine at all (`lib/directpp/`)
+The whole-file Direct++ flow (blind read → code-side clip/dedupe/summing →
+one-shot arithmetic repair → conditional cross-family verify → review routing)
+runs **inside the Next.js API route** — no Python, no OCR, no server. Set:
+- `NEXT_PUBLIC_AI_ENABLED=true`
+- `OPENROUTER_API_KEY=sk-or-...`
+
+It activates when the admin AI-flow is `direct_serverless`, when
+`DIRECT_SERVERLESS=true`, or **automatically on a Vercel deployment with no
+`ENGINE_URL`** (pure-Vercel mode). Input handling: PDFs/images go to the model
+natively (images lightly enhanced via sharp), `.eml` sends the body text +
+attachments, `.docx` falls back to its embedded images, spreadsheets arrive as
+extracted CSV text (no LibreOffice render on serverless — the one trade-off).
+Offline self-test: `node lib/directpp/selftest.mjs`. Note: Vercel Hobby caps
+functions at 60s — a big scan with repair + verify can exceed it; Pro (300s)
+removes the worry.
+
+### 2. The full Python engine (all flows: consensus, premium+, …)
+The engine shells out to `tesseract` / `LibreOffice` and uses heavy native libs,
+which serverless functions don't support — host it separately (any Docker host),
+then set on the app deployment:
+- `NEXT_PUBLIC_AI_ENABLED=true`
+- `ENGINE_URL=https://your-engine-host`
+
+With neither configured, the app still works: auth, signup, the **manual**
+timesheet flow, edit, questionnaire, US-holidays, validation, submit, and the
+admin console; the "Process with AI" upload is hidden.
 
 Supabase env: the publishable URL + anon key can be baked into
 `lib/supabase/config.js` as fallbacks (safe — the anon key is public by design,

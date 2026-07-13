@@ -35,7 +35,7 @@ export default async function AdminPage() {
       timesheets={timesheets || []}
       files={files || []}
       adminEdits={adminEdits || []}
-      aiFlow={["direct","premium_plus","budget","premium","consensus"].includes(flowRow?.value) ? flowRow.value : "direct"}
+      aiFlow={["direct","premium_plus","budget","premium","consensus","direct_serverless"].includes(flowRow?.value) ? flowRow.value : "direct"}
     />
   );
 }

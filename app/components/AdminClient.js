@@ -450,6 +450,7 @@ function FlowPicker({ supabase, adminId, initial }) {
   }
 
   const opts = [
+    { key: "direct_serverless", title: "🚀 Direct (serverless)", desc: "Runs entirely inside the web app — no Python engine, no server. Direct++ (read → arithmetic repair → cross-family verify) in a Vercel function; needs only the OpenRouter key. Excel arrives as extracted text." },
     { key: "consensus", title: "🎯 Consensus", desc: "Highest accuracy — needs TWO agreeing derivations (a deterministic read + a blind model read) before a number auto-accepts. Clean sheets whose printed total matches exit free; disagreements go to review, never a silent wrong number." },
     { key: "premium_plus", title: "✨ Premium+", desc: "Best value — Premium's cheap parse-first, PLUS a full-image GPT vision re-read for any scan it under-reads. Recovers faint scans (e.g. Rajani 3h → correct) for pennies." },
     { key: "direct", title: "⚡ Direct", desc: "Whole file to GPT-5.4-nano with one exhaustive prompt, escalating to 5.4-mini / GPT-5 on hard docs. One request per file." },
