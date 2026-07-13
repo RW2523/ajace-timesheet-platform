@@ -13,6 +13,7 @@ export const CFG = {
   minConfidence: 0.75,
   autoAcceptConfidence: 0.85,
   agreementTolerance: 2.0,
+  blockSpread: 5.0,                // cross-model spread above this hard-blocks
   verifyModel: "openai/gpt-5.4-mini",
   verifyMode: "auto",              // auto | always | off
   repair: true,
@@ -82,17 +83,27 @@ export async function directExtract({ input, fileName, month, year }) {
     return { employee: null, trace, reason: "all models failed" };
   }
 
-  // cross-model disagreement -> review
+  // cross-model disagreement, graded by size: a small spread (<=5h) on two
+  // otherwise-plausible reads means "have a human glance" (needs_review), not
+  // "blocked" -- only a real divergence hard-blocks. Either way the second
+  // model already served as an independent opinion, so the verify call is
+  // redundant and skipped.
+  let spread = 0;
   if (totalsSeen.length >= 2) {
-    const spread = Math.max(...totalsSeen) - Math.min(...totalsSeen);
-    if (spread > CFG.agreementTolerance) {
+    spread = Math.max(...totalsSeen) - Math.min(...totalsSeen);
+    if (spread > CFG.blockSpread) {
       best.notes.push(`models disagreed on monthly total by ${round2(spread)}h`);
       best.needsReview = true;
+    } else if (spread > CFG.agreementTolerance) {
+      best.notes.push(
+        `models differed slightly on the monthly total (${round2(spread)}h) -- flagged for review`);
+      best.confidence = Math.min(best.confidence, 0.8);   // -> needs_review, not blocked
     }
   }
 
-  // conditional cross-family blind verify
-  if (shouldVerify(best, images, repaired) && best.total > 0) {
+  // conditional cross-family blind verify (skipped when two models already voted)
+  if (spread <= CFG.agreementTolerance &&
+      shouldVerify(best, images, repaired) && best.total > 0) {
     await verifyRound(best, pdf, images, extraText, month, year, act);
   }
 
@@ -117,10 +128,15 @@ function mapContract(data, month, year, model, act) {
       if ((byDate.get(d).total || 0) !== (total || 0)) conflicts++;
       continue;
     }
+    // an unsplit day total counts as regular time (mirror the engine's
+    // split_regular_overtime), so summary tiles don't show "Regular 0".
+    let reg = num(ent.regular_hours);
+    let ot = num(ent.overtime_hours);
+    if (total != null && reg == null && ot == null) { reg = total; ot = 0; }
     byDate.set(d, {
       date: d,
-      regular_hours: num(ent.regular_hours),
-      overtime_hours: num(ent.overtime_hours),
+      regular_hours: reg,
+      overtime_hours: ot,
       total_hours: total,
       note: ent.note || null,
       raw: ent.raw || null,
@@ -131,6 +147,17 @@ function mapContract(data, month, year, model, act) {
   const worked = days.filter((e) => (e.total || 0) > 0).length;
   const total = round2(days.reduce((s, e) => s + (e.total || 0), 0));
   const notes = [];
+  // a printed total implausibly small next to a full daily grid is a misread of
+  // some other box ("Total hours in the day 8:00"), not the month's total --
+  // discard it instead of raising a false TOTAL_MISMATCH (and instead of letting
+  // it trigger a pointless repair round).
+  let statedTotal = num(data.stated_total);
+  if (statedTotal != null && days.length && total >= 40 &&
+      statedTotal < 40 && statedTotal < 0.5 * total) {
+    notes.push(`discarded implausible printed total ${statedTotal}h ` +
+      `(the daily grid sums to ${total}h)`);
+    statedTotal = null;
+  }
   if (dropped) {
     const n = `deduped ${dropped} repeated day entr${dropped === 1 ? "y" : "ies"}` +
       (conflicts ? ` (${conflicts} conflicting -- kept the first reading)` : "");
@@ -141,7 +168,7 @@ function mapContract(data, month, year, model, act) {
   for (const d of data.self_check?.discrepancies || []) notes.push(`self-check: ${d}`);
   return {
     model, days, worked, total, notes,
-    statedTotal: num(data.stated_total),
+    statedTotal,
     confidence: num(data.confidence) ?? 0.65,
     needsReview: conflicts > 2,
     verification: "unverified",

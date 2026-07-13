@@ -117,6 +117,7 @@ class Settings(BaseSettings):
     direct_min_confidence: float = 0.75       # below -> escalate to next model
     direct_autoaccept_confidence: float = 0.85  # at/above + no errors -> auto-accept
     direct_agreement_tolerance: float = 2.0   # cross-model monthly-total agreement (h)
+    direct_block_spread: float = 5.0          # spread above this hard-blocks; below -> review
     direct_max_pages: int = 20                # page cap per request
     # advanced direct: a cheap BLIND second read that re-derives just the monthly
     # total. Agreement -> confirmed (auto-accept eligible); disagreement -> flag

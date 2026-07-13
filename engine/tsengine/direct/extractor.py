@@ -308,19 +308,29 @@ class DirectExtractor:
             act("DirectReader", "rejected", "all models failed", ok=False)
             return None
 
-        # cross-model agreement flag (>=2 reads disagreeing on the month total)
+        # cross-model disagreement, graded by size: a small spread (<= block
+        # threshold) on two plausible reads asks for a human GLANCE (review), not
+        # a hard block; only a real divergence blocks. Either way the second
+        # model already served as the independent opinion -> verify is redundant.
+        spread = 0.0
         if len(totals_seen) >= 2:
             spread = max(totals_seen) - min(totals_seen)
-            if spread > self.s.direct_agreement_tolerance:
+            if spread > self.s.direct_block_spread:
                 best.notes.append(
                     f"models disagreed on monthly total by {spread:g}h "
                     f"({', '.join(f'{t:g}' for t in totals_seen)})")
-                best.needs_llm = True   # -> routed to human review by the validator
+                best.needs_llm = True   # -> blocked by the validator
+            elif spread > self.s.direct_agreement_tolerance:
+                best.notes.append(
+                    f"models differed slightly on the monthly total ({spread:g}h) "
+                    "-- flagged for review")
+                best.confidence = min(best.confidence, 0.8)   # -> needs_review
 
         # BLIND self-verification: a cheap second read re-derives just the monthly
         # total (never shown the first read's number). Agreement corroborates the
         # read -> confirmed; disagreement flags a possibly-wrong confident read.
-        if self._should_verify(best, images, repaired):
+        if spread <= self.s.direct_agreement_tolerance and \
+                self._should_verify(best, images, repaired):
             _, bt = _worked_total(best)
             if bt > 0:
                 self._verify(best, bt, pdf, images, month, year, act)
@@ -335,6 +345,17 @@ class DirectExtractor:
             method=f"direct:{model}", quality=raw.quality, order="MDY")
         self._absorb_direct_fields(res, data)
         self._dedupe_entries(res, act)
+        # a printed total implausibly small next to a full daily grid is a
+        # misread of some other box ("Total hours in the day 8:00"), not the
+        # month's total -- discard it rather than raise a false TOTAL_MISMATCH
+        # (or trigger a pointless repair round on the phantom mismatch).
+        _, code_sum = _worked_total(res)
+        if res.stated_total is not None and res.entries and code_sum >= 40 \
+                and res.stated_total < 40 and res.stated_total < 0.5 * code_sum:
+            res.notes.append(
+                f"discarded implausible printed total {res.stated_total:g}h "
+                f"(the daily grid sums to {code_sum:g}h)")
+            res.stated_total = None
         return res
 
     @staticmethod

@@ -322,3 +322,50 @@ def test_eml_input_carries_body_text(tmp_path):
     pdf, images, text = ext._as_model_input(p)
     assert pdf is None and images == []
     assert "Approved 160 Hours" in text and "Subject:" in text
+
+
+# --- disagreement grading + implausible stated-total discard --------------- #
+def test_small_cross_model_spread_is_review_not_blocked():
+    # nano 136h vs mini 160h... too big; use 157 vs 160 (3h) -> review band
+    a = _mega(total_days=20, conf=0.5)                       # 160h, escalates
+    b = _mega(total_days=20, conf=0.92)                      # 160h accepted
+    # make the second read differ by 3h (one 5h day instead of 8h)
+    b["entries"][0]["total_hours"] = 5
+    b["self_check"]["sum_of_daily_totals"] = 157.0
+    b["stated_total"] = 157.0
+    ext, s = _extractor({"openai/gpt-5.4-nano": a, "openai/gpt-5.4-mini": b})
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.needs_llm is False                              # NOT hard-blocked
+    assert r.confidence <= 0.8                               # -> needs_review
+    assert any("differed slightly" in n for n in r.notes)
+
+
+def test_large_cross_model_spread_still_blocks():
+    ext, s = _extractor({
+        "openai/gpt-5.4-nano": _mega(total_days=17, conf=0.5),   # 136h
+        "openai/gpt-5.4-mini": _mega(total_days=20, conf=0.5),   # 160h
+        "openai/gpt-5": _mega(total_days=22, conf=0.5),          # 176h
+    })
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.needs_llm is True                               # 40h spread -> blocked
+
+
+def test_implausible_stated_total_discarded():
+    # a full 160h grid with a misread "8h" printed total -> stated dropped, noted
+    m = _mega(total_days=20, conf=0.9)
+    m["stated_total"] = 8.0
+    m["self_check"]["matches_stated_total"] = True           # would have fired repair
+    ext, s = _extractor({"*": m})
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.stated_total is None
+    assert any("implausible printed total" in n for n in r.notes)
+    assert ext.router.client.calls == ["openai/gpt-5.4-nano"]  # no repair round wasted
+
+
+def test_plausible_small_stated_total_kept():
+    # a genuine part-time month: 24h grid with printed 24 -> stated kept
+    m = _mega(total_days=3, conf=0.9)
+    m["stated_total"] = 24.0
+    ext, s = _extractor({"*": m})
+    r = ext.extract("el.pdf", "el.pdf", 4, 2026, None, None, FileKind.PDF_NATIVE)[0]
+    assert r.stated_total == 24.0
