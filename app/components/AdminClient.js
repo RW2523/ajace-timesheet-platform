@@ -218,7 +218,21 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [preview, setPreview] = useState(false);
-  const r = rollup(days);
+  // Some documents only provide SUMMARY totals (weekly rows / a stated month
+  // total) with no per-day breakdown -- their day grid is empty, so recomputing
+  // from days would wrongly show 0. Fall back to the totals stored at
+  // extraction time, and never clobber them with zeros on an admin save.
+  const dayR = rollup(days);
+  const stored = edit.fields?.totals || {};
+  const summaryOnly = dayR.total === 0 && Number(stored.total) > 0;
+  const r = summaryOnly
+    ? {
+        regular: stored.regular ?? stored.total ?? 0,
+        overtime: stored.overtime ?? 0,
+        total: stored.total ?? 0,
+        daysWorked: stored.daysWorked ?? stored.days_worked ?? "—",
+      }
+    : dayR;
   const q = edit.questionnaire || {};
 
   async function saveAdminEdit() {
@@ -258,6 +272,15 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
             <div className="tile tot"><div className="v">{r.total}</div><div className="l">Total</div></div>
             <div className="tile"><div className="v">{r.daysWorked}</div><div className="l">Days worked</div></div>
           </div>
+
+          {summaryOnly && (
+            <div className="alert info" style={{ marginBottom: 14 }}>
+              This document only provided <b>summary totals</b> (weekly rows or a
+              stated month total) — there is no per-day breakdown, so the calendar
+              below is empty. The totals above come from the document’s summary.
+              Use “Preview document” to verify against the original.
+            </div>
+          )}
 
           {(edit.validation?.errors?.length > 0) && (
             <div className="alert error" style={{ marginBottom: 14 }}>
