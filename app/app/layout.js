@@ -1,4 +1,5 @@
 import "./globals.css";
+import { ProductNav } from "@/components/ProductNav";
 
 export const metadata = {
   title: "Ajace Timesheets",
@@ -8,7 +9,10 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ProductNav current="timesheet" />
+        {children}
+      </body>
     </html>
   );
 }

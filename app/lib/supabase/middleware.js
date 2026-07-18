@@ -6,10 +6,13 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config";
 export async function updateSession(request) {
   let response = NextResponse.next({ request });
 
+  // Share the session cookie across *.ajace.com subdomains for SSO (set in prod only).
+  const cookieDomain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
   const supabase = createServerClient(
     SUPABASE_URL,
     SUPABASE_ANON_KEY,
     {
+      ...(cookieDomain ? { cookieOptions: { domain: cookieDomain } } : {}),
       cookies: {
         getAll() {
           return request.cookies.getAll();
