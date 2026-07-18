@@ -1,7 +1,7 @@
 # ───────── secrets — NEVER commit ─────────
-**/.env
-**/.env.local
-**/.env.*.local
+**/.env*
+!**/.env.example
+!**/.env.production.example
 *.key
 *.pem
 *.p12
@@ -9,8 +9,12 @@
 # ───────── processing outputs (still excluded) ─────────
 **/output/
 **/results/
-# NOTE: Timesheet/ and TimeSheet-May/ source data are intentionally INCLUDED
-# in this repo per the owner's decision (they contain employee PII + invoices).
+# ───────── employee PII — NEVER commit ─────────
+# Real timesheet source docs (names + hours) belong in the private `ts-uploads`
+# Supabase bucket, NOT git. Purge any already in history: deploy/purge-timesheet-pii.sh
+Timesheet-April/
+TimeSheet-May/
+Timesheet/
 
 # ───────── python ─────────
 __pycache__/

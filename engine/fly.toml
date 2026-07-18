@@ -1,0 +1,36 @@
+# Fly.io deployment for the Python Timesheet Intelligence engine.
+# Deploy from the engine/ directory:
+#   cd engine
+#   fly launch --no-deploy      # first time (creates the app; keep this toml)
+#   fly secrets set TSE_API_KEY=... TSE_OPENROUTER_API_KEY=...
+#   fly deploy
+app = "ajace-timesheet-engine"
+primary_region = "iad"          # US-East, co-located with Supabase/Vercel
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  TSE_LLM_POLICY = "on_low_confidence"
+  TSE_USE_LOCAL_OCR = "true"
+  TSE_HOLIDAY_REGION = "US"
+  TSE_OUTPUT_DIR = "/tmp/ts_output"
+  PYTHONUNBUFFERED = "1"
+
+[http_service]
+  internal_port = 8078          # engine binds ${PORT:-8078}; no PORT set → 8078
+  force_https = true
+  auto_stop_machines = "stop"   # scale to zero when idle (cost saving)
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"                 # LibreOffice + OCR headroom

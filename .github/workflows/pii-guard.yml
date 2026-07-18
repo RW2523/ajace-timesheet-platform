@@ -1,0 +1,31 @@
+name: PII guard
+
+# Machine-enforces "no employee-PII directories in the repo or its history".
+# Fails the PR/push if the purged PII paths ever reappear (WS1-T2 / WS5-T3 guard).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  no-pii:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so we can scan every object
+      - name: Fail if PII paths exist in the working tree
+        run: |
+          if git ls-files | grep -E '^(Timesheet-April|TimeSheet-May|Timesheet)/'; then
+            echo "::error::Employee-PII directory tracked in the repo. These belong in the ts-uploads bucket, not git."
+            exit 1
+          fi
+          echo "working tree: clean"
+      - name: Fail if PII objects exist anywhere in history
+        run: |
+          if git rev-list --all --objects | grep -E 'Timesheet-April|TimeSheet-May'; then
+            echo "::error::Employee-PII objects present in git HISTORY. Re-run deploy/purge-timesheet-pii.sh and force-push."
+            exit 1
+          fi
+          echo "history: clean"

@@ -1,0 +1,26 @@
+# Local / VPS / AWS-ECS reference for the Python engine.
+#   docker compose up --build          # http://localhost:8078/api/health
+# For a plain VPS (incl. a Bluehost VPS) or an AWS EC2/ECS box, this is the
+# simplest way to run the engine as a long-lived service.
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ajace-timesheet-engine:latest
+    container_name: ajace-timesheet-engine
+    ports:
+      - "8078:8078"
+    env_file:
+      - .env                     # copy .env.production.example → .env and fill in
+    environment:
+      TSE_OUTPUT_DIR: /tmp/ts_output
+      TSE_USE_LOCAL_OCR: "true"
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8078/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

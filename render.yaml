@@ -1,0 +1,36 @@
+# Render Blueprint for the Python Timesheet Intelligence engine.
+# This file lives at the REPO ROOT (Render reads render.yaml from the root); the
+# engine itself is the `engine/` subdirectory (rootDir below).
+#
+# Deploy: push to GitHub, then in Render → New → Blueprint → pick this repo.
+# The Docker image bundles tesseract + LibreOffice (see engine/Dockerfile).
+services:
+  - type: web
+    name: ajace-timesheet-engine
+    runtime: docker
+    rootDir: engine
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: standard          # 2 GB RAM — LibreOffice + OCR + PDF raster need headroom
+    region: virginia        # US-East (iad1), co-located with Supabase/Vercel
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      # Shared secret the Next.js app sends as X-API-Key (must equal app's ENGINE_API_KEY)
+      - key: TSE_API_KEY
+        sync: false
+      # OpenRouter key for LLM/vision escalation (optional; without it, deterministic + local OCR only)
+      - key: TSE_OPENROUTER_API_KEY
+        sync: false
+      - key: TSE_OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: TSE_LLM_POLICY
+        value: on_low_confidence
+      - key: TSE_USE_LOCAL_OCR
+        value: "true"
+      - key: TSE_HOLIDAY_REGION
+        value: US
+      - key: TSE_OUTPUT_DIR
+        value: /tmp/ts_output
+      - key: PYTHONUNBUFFERED
+        value: "1"

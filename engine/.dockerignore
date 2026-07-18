@@ -5,8 +5,13 @@ __pycache__/
 .ruff_cache/
 output/
 results/
+reports/
+.venv/
+venv/
+scripts/
 .env
 .env.*
 tests/
 *.md
 .git
+.DS_Store
