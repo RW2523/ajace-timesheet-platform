@@ -1,24 +1,10 @@
-// Central Supabase config. The publishable (anon) credentials are safe to ship to the
-// browser (data is protected by RLS) but MUST come from env — no Supabase project is
-// baked into source, so this repo is not hard-wired to one project and no key lives in
-// git. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in Vercel
-// (Settings → Environment Variables) or .env.local.
-function required(name, value) {
-  if (!value) {
-    throw new Error(
-      `Missing ${name}. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY ` +
-        `in the environment (Vercel → Settings → Environment Variables, or .env.local).`,
-    );
-  }
-  return value;
-}
+// Central Supabase config. Env vars win; the fallbacks are the *publishable* (anon)
+// credentials of the shared AJACE project — safe to ship to the browser (data is
+// protected by RLS) and kept as a boot fallback so a deploy without dashboard env
+// still runs. No secret (service_role, DB password) is ever baked into source.
+export const SUPABASE_URL =
+  process.env.NEXT_PUBLIC_SUPABASE_URL || "https://coaszrosqlhifcwxurwu.supabase.co";
 
-export const SUPABASE_URL = required(
-  "NEXT_PUBLIC_SUPABASE_URL",
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-);
-
-export const SUPABASE_ANON_KEY = required(
-  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-);
+export const SUPABASE_ANON_KEY =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  "sb_publishable_nO8n5IxHIdrZSYf6WN5Ixw_vlRcUOOl";
