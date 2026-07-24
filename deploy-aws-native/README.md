@@ -89,6 +89,10 @@ watch on first run:
 
 - **`/api/data` scoping** (`lib/aws/data.js`) is the RLS replacement — exercise every
   screen as a non-admin AND an admin and confirm no cross-user data leaks.
-- **Password reset email** isn't wired to a sender yet — `/api/auth/forgot` creates the
-  token and logs the link; add **Amazon SES** to email it (marked `TODO` in that route).
+- **Password reset email** is wired to **Amazon SES** (`lib/aws/email.js`). To turn it on:
+  1. In SES, **verify a sender** (`noreply@ajace.com` or your domain — domain verification adds DKIM).
+  2. **Request production access** (new SES accounts start in *sandbox* — can only send to verified
+     addresses until approved; the request is free and usually approved within a day).
+  3. Add `ses:SendEmail` to the EC2 instance IAM role, set `SES_FROM_EMAIL` in `.env.production`.
+  If `SES_FROM_EMAIL` is unset, the flow still works — it logs the link instead of emailing.
 - **First admin** must be promoted via `make-admin.sh` (no admin exists at first signup).
