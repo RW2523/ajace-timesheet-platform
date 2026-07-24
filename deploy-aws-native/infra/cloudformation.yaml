@@ -31,6 +31,13 @@ Parameters:
     Type: String
     Default: ajace-ts-files
     Description: Globally-unique S3 bucket name for timesheet files.
+  BudgetAlertEmail:
+    Type: String
+    Description: Email to alert when the monthly cost budget crosses thresholds.
+  MonthlyBudgetUSD:
+    Type: Number
+    Default: 15
+    Description: Monthly cost budget in USD (alerting only — not a hard cap).
   InstanceType:
     Type: String
     Default: t4g.small
@@ -149,6 +156,29 @@ Resources:
           apt-get install -y nodejs git postgresql-client awscli
           npm i -g pm2
           echo "Base ready. Next: clone the repo, add app/.env.production, run deploy-aws-native/scripts/bootstrap.sh" > /etc/motd
+
+  # AWS Budgets — the first two budgets are FREE. Alerts by email at thresholds.
+  # NOTE: this ALERTS, it does not hard-stop spend. To actually stay under the
+  # limit, run intermittently (scripts/instance.sh stop) — see README.
+  MonthlyBudget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: ajace-timesheet-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUSD
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 50,  ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail }]
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80,  ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail }]
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail }]
+        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100, ThresholdType: PERCENTAGE }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref BudgetAlertEmail }]
 
 Outputs:
   AppPublicIP:

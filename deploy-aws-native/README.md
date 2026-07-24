@@ -52,7 +52,8 @@ aws cloudformation deploy \
       VpcId=vpc-xxxx AppSubnetId=subnet-public \
       DbSubnetIds=subnet-aaa,subnet-bbb \
       KeyName=your-keypair SSHLocation=YOUR_IP/32 \
-      DBPassword='a-strong-password' BucketName=ajace-ts-files
+      DBPassword='a-strong-password' BucketName=ajace-ts-files \
+      BudgetAlertEmail=you@ajace.com MonthlyBudgetUSD=15
 aws cloudformation describe-stacks --stack-name ajace-timesheet \
   --query 'Stacks[0].Outputs' --output table    # note AppPublicIP + DBEndpoint
 ```
@@ -132,6 +133,16 @@ console (both free — new accounts start in sandbox). The instance already has
 | OpenRouter | Direct++ usage | ~$1–15 |
 
 RDS can't cheaply "turn off" like EC2, so the always-down ~$2/mo trick doesn't apply here — this is the trade for going fully managed/AWS-native.
+
+### $15/month budget (free)
+The stack creates a **$15/month AWS Budget** (email alerts at 50/80/100% + forecast). AWS Budgets are **free** (first two). Add one to an existing account without redeploying:
+```bash
+BUDGET_EMAIL=you@ajace.com deploy-aws-native/scripts/budget.sh 15
+```
+**Honest caveat — a budget alerts, it does NOT hard-stop spending.** To actually stay under $15:
+- **First 12 months** you're already ~$14/mo (RDS + EBS free-tier) — under $15 by default.
+- **After the free year** the stack is ~$28/mo, so $15 means running the box only ~half the month: `scripts/instance.sh stop` when idle, `start` when needed (RDS + S3 keep the data). Or `scripts/teardown.sh` between pilots (RDS snapshot + S3 retained, ~$1/mo).
+- For an automatic cap, a **Budget Action** can stop the EC2 instance at 100% (needs an IAM role) — ask if you want it wired in.
 
 ---
 

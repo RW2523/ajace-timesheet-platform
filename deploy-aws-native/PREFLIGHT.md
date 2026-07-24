@@ -15,6 +15,7 @@ Tick these before running the CloudFormation deploy. ~10 minutes.
 - [ ] **Your public IP** for SSH — `curl ifconfig.me` (pass as `SSHLocation=IP/32`)
 - [ ] **RDS password** chosen (8+ chars, no `@`/`/` to keep the URL simple)
 - [ ] **S3 bucket name** — globally unique (e.g. `ajace-ts-files-<something>`)
+- [ ] **BudgetAlertEmail** — where the $15/mo budget alerts go (free)
 
 ## 3. App secrets (go in app/.env.production)
 - [ ] **OPENROUTER_API_KEY** (Direct++ AI)
@@ -26,7 +27,8 @@ Tick these before running the CloudFormation deploy. ~10 minutes.
 
 ## 5. Cost awareness
 - [ ] ~**$28/mo** steady (~$14 first year) + OpenRouter usage
-- [ ] Set a **billing alarm** (Billing → Budgets)
+- [ ] **$15/mo budget** auto-created by the stack (alerts only) — or `scripts/budget.sh`
+- [ ] To truly stay ≤ $15 after the free year: run intermittently (`instance.sh stop`)
 - [ ] Know the pause options: `instance.sh stop` (compute only) · `teardown.sh` (snapshot + delete)
 
 ## 6. Post-launch smoke test
