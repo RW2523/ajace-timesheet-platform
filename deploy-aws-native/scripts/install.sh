@@ -21,9 +21,20 @@ if ! command -v node >/dev/null 2>&1; then
   sudo apt-get install -y nodejs
 fi
 sudo npm i -g pm2 >/dev/null 2>&1 || sudo npm i -g pm2
+
+# psql client + unzip + caddy prereqs (NOTE: Ubuntu 24.04 has no 'awscli' apt pkg)
+sudo apt-get update -y
+sudo apt-get install -y postgresql-client unzip debian-keyring debian-archive-keyring apt-transport-https curl
+
+# AWS CLI v2 via the official installer (arch-aware)
+if ! command -v aws >/dev/null 2>&1; then
+  case "$(uname -m)" in aarch64|arm64) AZ=aarch64;; *) AZ=x86_64;; esac
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$AZ.zip" -o /tmp/awscliv2.zip
+  unzip -q -o /tmp/awscliv2.zip -d /tmp && sudo /tmp/aws/install --update
+fi
+
+# Caddy (auto-HTTPS reverse proxy)
 if ! command -v caddy >/dev/null 2>&1; then
-  sudo apt-get update -y
-  sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl postgresql-client awscli
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
   sudo apt-get update -y && sudo apt-get install -y caddy

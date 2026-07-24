@@ -10,9 +10,15 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 sudo npm i -g pm2 >/dev/null 2>&1 || sudo npm i -g pm2
 
-echo "== Caddy (TLS) + psql client + awscli =="
+echo "== psql client + unzip + AWS CLI v2 + Caddy =="
 sudo apt-get update -y
-sudo apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl postgresql-client awscli
+sudo apt-get install -y postgresql-client unzip debian-keyring debian-archive-keyring apt-transport-https curl
+# Ubuntu 24.04 has no 'awscli' apt package — use the official v2 installer.
+if ! command -v aws >/dev/null 2>&1; then
+  case "$(uname -m)" in aarch64|arm64) AZ=aarch64;; *) AZ=x86_64;; esac
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$AZ.zip" -o /tmp/awscliv2.zip
+  unzip -q -o /tmp/awscliv2.zip -d /tmp && sudo /tmp/aws/install --update
+fi
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
 sudo apt-get update -y && sudo apt-get install -y caddy
