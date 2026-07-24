@@ -53,8 +53,11 @@ Parameters:
       a build that runs out of disk fails with ENOSPC. ~$4/mo at 50 GB gp3.
   DBEngineVersion:
     Type: String
-    Default: '16.4'
-    Description: Pinned so a future default major version can't change under you.
+    Default: '16'
+    Description: >
+      Major version only — RDS picks the latest supported minor, so this can't
+      break when AWS retires a specific minor. Pinning the MAJOR still stops a
+      future default (e.g. 18) from changing under you.
   UbuntuAmi:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
