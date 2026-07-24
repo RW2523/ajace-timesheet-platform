@@ -18,7 +18,7 @@ export default function DashboardClient({ profile }) {
 
   // AI document processing needs the separately-hosted Python engine. When it's
   // not configured (e.g. on Vercel), the app degrades to manual entry only.
-  const AI_ENABLED = process.env.NEXT_PUBLIC_AI_ENABLED === "true";
+  const AI_ENABLED = ["true", "1"].includes(process.env.NEXT_PUBLIC_AI_ENABLED);
 
   const [period, setPeriod] = useState(defaultPeriod());
   const { month, year } = period;
