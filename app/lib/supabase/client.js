@@ -49,25 +49,25 @@ export function createClient() {
 
     storage: {
       from() {
+        // App-proxied storage: bytes flow browser <-> app <-> S3. Same-origin,
+        // so no S3 CORS config and no presigned-PUT checksum issues.
+        const getUrl = (path) => `/api/storage/get?path=${encodeURIComponent(path)}`;
         return {
           async upload(path, file) {
-            const contentType = file?.type || "application/octet-stream";
-            const s = await fetch("/api/storage/sign", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ path, method: "put", contentType }) });
-            const { url, error } = await s.json().catch(() => ({}));
-            if (!url) return { data: null, error: wrapErr(error) };
-            const put = await fetch(url, { method: "PUT", body: file, headers: { "Content-Type": contentType } });
-            return put.ok ? { data: { path }, error: null } : { data: null, error: wrapErr("upload failed") };
+            const fd = new FormData();
+            fd.append("path", path);
+            fd.append("file", file);
+            const r = await fetch("/api/storage/upload", { method: "POST", body: fd });
+            if (r.ok) return { data: { path }, error: null };
+            const j = await r.json().catch(() => ({}));
+            return { data: null, error: wrapErr(j.error || "upload failed") };
           },
+          // returns a same-origin URL the app serves (usable as src/href or fetched)
           async createSignedUrl(path) {
-            const s = await fetch("/api/storage/sign", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ path, method: "get" }) });
-            const j = await s.json().catch(() => ({}));
-            return j.url ? { data: { signedUrl: j.url }, error: null } : { data: null, error: wrapErr(j.error) };
+            return { data: { signedUrl: getUrl(path) }, error: null };
           },
           async download(path) {
-            const s = await fetch("/api/storage/sign", { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ path, method: "get" }) });
-            const j = await s.json().catch(() => ({}));
-            if (!j.url) return { data: null, error: wrapErr(j.error) };
-            const f = await fetch(j.url);
+            const f = await fetch(getUrl(path));
             return f.ok ? { data: await f.blob(), error: null } : { data: null, error: wrapErr("download failed") };
           },
           async remove(paths) {

@@ -27,9 +27,17 @@ export async function signedPutUrl(path, contentType, expiresIn = 120) {
     { expiresIn }
   );
 }
+export async function putObject(path, body, contentType) {
+  await s3.send(new PutObjectCommand({
+    Bucket: BUCKET, Key: keyFor(path), Body: body,
+    ContentType: contentType || "application/octet-stream",
+  }));
+  return path;
+}
 export async function getObjectBytes(path) {
   const out = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: keyFor(path) }));
-  return Buffer.from(await out.Body.transformToByteArray());
+  const bytes = Buffer.from(await out.Body.transformToByteArray());
+  return { bytes, contentType: out.ContentType || "application/octet-stream" };
 }
 export async function deleteObjects(paths) {
   await Promise.all(

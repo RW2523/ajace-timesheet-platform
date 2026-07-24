@@ -37,7 +37,7 @@ export async function createClient() {
           },
           async download(path) {
             if (!canReach(path)) return { data: null, error: { message: "forbidden" } };
-            const bytes = await getObjectBytes(path);
+            const { bytes } = await getObjectBytes(path);
             return { data: new Blob([bytes]), error: null };
           },
           async remove(paths) {
