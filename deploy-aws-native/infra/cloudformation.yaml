@@ -189,7 +189,8 @@ Outputs:
   DBEndpoint:
     Description: RDS host for DATABASE_URL.
     Value: !GetAtt Database.Endpoint.Address
-  DATABASE_URL_hint:
-    Value: !Sub 'postgresql://tsadmin:<DBPassword>@${Database.Endpoint.Address}:5432/timesheet'
+  DatabaseUrlHint:
+    Description: Template for DATABASE_URL — replace <DBPassword> with your DBPassword value.
+    Value: !Sub 'postgresql://tsadmin:REPLACE_DBPASSWORD@${Database.Endpoint.Address}:5432/timesheet'
   BucketName:
     Value: !Ref FilesBucket
