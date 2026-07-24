@@ -1,0 +1,8 @@
+# never commit secrets or the cloned upstream / build output
+.env
+.env.*
+!env.app.example
+supabase-docker/
+.supabase-src/
+*.sql.gz
+node_modules/

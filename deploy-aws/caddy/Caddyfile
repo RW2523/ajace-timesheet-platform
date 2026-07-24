@@ -1,0 +1,30 @@
+# Automatic HTTPS (Let's Encrypt) + reverse proxy for the single box.
+# Replace the two hostnames with yours, and set an email for ACME.
+# DNS: point BOTH A records at the EC2 public IP (Cloudflare: grey-cloud/DNS-only
+# for the first issue, then you may switch to orange-cloud/proxied).
+
+{
+	email admin@ajace.com
+}
+
+# The app UI
+timesheet.ajace.com {
+	encode gzip
+	reverse_proxy timesheet:3009
+}
+
+# The Supabase API (auth / rest / storage) — this is NEXT_PUBLIC_SUPABASE_URL
+api.ajace.com {
+	encode gzip
+	reverse_proxy kong:8000
+}
+
+# --- No domain yet? Comment the two blocks above and uncomment this to serve
+# --- the app over plain HTTP on the EC2 IP (auth cookies are less strict on
+# --- http, fine for a quick demo; use a domain for anything real):
+# :80 {
+# 	reverse_proxy /auth/* kong:8000
+# 	reverse_proxy /rest/* kong:8000
+# 	reverse_proxy /storage/* kong:8000
+# 	reverse_proxy timesheet:3009
+# }

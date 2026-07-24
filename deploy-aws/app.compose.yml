@@ -1,0 +1,61 @@
+# Overlay compose: adds the Timesheet Next.js app + Caddy TLS + switches
+# Supabase Storage to an S3 backend. Use it ALONGSIDE the official Supabase
+# self-host compose so they share one project + network:
+#
+#   docker compose \
+#     -f supabase-docker/docker-compose.yml \
+#     -f app.compose.yml \
+#     up -d db kong auth rest storage imgproxy meta timesheet caddy
+#
+# (Listing only those services keeps studio/realtime/analytics/vector/functions
+#  OFF, which is what fits the 2 GB box.)
+services:
+  # ---- Timesheet Next.js app (Direct++ forced; no Python engine) ------------
+  timesheet:
+    build:
+      context: ../app
+      dockerfile: ../deploy-aws/Dockerfile.app
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    image: ajace-timesheet-app:latest
+    container_name: ajace-timesheet-app
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      NODE_ENV: production
+      # Force serverless Direct++ (OpenRouter direct) — engine intentionally absent
+      DIRECT_SERVERLESS: "true"
+    expose: ["3009"]
+    depends_on: [kong]
+
+  # ---- Switch Supabase Storage to S3 (files land in your bucket) ------------
+  # Overrides only the env of the existing `storage` service from the base compose.
+  storage:
+    environment:
+      STORAGE_BACKEND: s3
+      STORAGE_S3_BUCKET: ${STORAGE_S3_BUCKET}
+      STORAGE_S3_REGION: ${STORAGE_S3_REGION}
+      # Optional custom endpoint (leave unset for real AWS S3):
+      # STORAGE_S3_ENDPOINT: ${STORAGE_S3_ENDPOINT}
+      # Credentials: prefer the EC2 instance IAM role (nothing to set here).
+      # If you must use static keys, uncomment and put them in .env:
+      # AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      # AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_DEFAULT_REGION: ${STORAGE_S3_REGION}
+
+  # ---- Caddy: automatic HTTPS + reverse proxy -------------------------------
+  caddy:
+    image: caddy:2
+    container_name: ajace-caddy
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [timesheet, kong]
+
+volumes:
+  caddy_data:
+  caddy_config:
