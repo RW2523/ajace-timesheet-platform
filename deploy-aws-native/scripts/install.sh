@@ -15,6 +15,14 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"     # deploy-aws-native
 ROOT="$(cd "$HERE/.." && pwd)"               # repo root
 ENVF="$ROOT/app/.env.production"
 
+echo "==> [0/6] swap (2 GB box + Next build can OOM without it)"
+if [ "$(swapon --show | wc -l)" -eq 0 ] && [ ! -f /swapfile ]; then
+  sudo fallocate -l 2G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+  sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+  echo "   2 GB swap enabled"
+fi
+
 echo "==> [1/6] system packages (node, pm2, caddy, psql, awscli)"
 if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
