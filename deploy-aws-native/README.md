@@ -70,9 +70,18 @@ cp deploy-aws-native/env.production.example app/.env.production
 bash deploy-aws-native/scripts/bootstrap.sh    # setup + build + migrate + pm2 + caddy
 ```
 
-### Phase 3 — DNS, admin, email
+### Phase 3 — access, admin, email
+
+**No domain yet? Use the raw EC2 URL (default).** The shipped `Caddyfile` serves
+plain HTTP on port 80, so just open **`http://<AppPublicIP>`**. For this to work,
+keep `COOKIE_SECURE=false` in `app/.env.production` (otherwise the login cookie
+won't stick over HTTP) and set `SITE_URL=http://<AppPublicIP>`.
+> ⚠️ Plain HTTP is unencrypted — fine for a demo/pilot with test data, but add a
+> domain + HTTPS before real employee data. To switch later: point a DNS A record
+> at the box, uncomment the domain block in `Caddyfile`, set `COOKIE_SECURE=true`
+> and `SITE_URL=https://…`, then `sudo systemctl reload caddy` + rebuild.
+
 ```bash
-# point timesheet.<domain> A record at <AppPublicIP> (Caddy auto-issues TLS)
 deploy-aws-native/scripts/make-admin.sh you@ajace.com   # first admin
 deploy-aws-native/scripts/ses-test.sh you@ajace.com      # confirm SES delivery
 ```

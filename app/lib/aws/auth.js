@@ -13,9 +13,15 @@ export const verifyPassword = (pw, hash) => bcrypt.compare(pw, hash);
 
 function cookieBase() {
   const domain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
+  // `secure` cookies are only sent over HTTPS. Set COOKIE_SECURE=false when
+  // serving over plain HTTP (e.g. the raw EC2 URL with no domain/TLS yet),
+  // otherwise login silently fails because the cookie never comes back.
+  const secure = process.env.COOKIE_SECURE
+    ? process.env.COOKIE_SECURE === "true"
+    : process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure,
     sameSite: "lax",
     path: "/",
     ...(domain ? { domain } : {}),
