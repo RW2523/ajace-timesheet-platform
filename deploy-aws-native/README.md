@@ -37,22 +37,49 @@ The app **builds clean** as an AWS-native app (verified: `next build` → all 23
 | 5 | **OpenRouter API key** | Direct++ document AI |
 | 6 | **`AUTH_JWT_SECRET`** you generate (`openssl rand -base64 48`) | signs the login session |
 
-## Deploy
+## Deploy — production, in 3 phases
+
+### Phase 1 — provision all AWS infra (one command, your creds)
+`infra/cloudformation.yaml` creates the S3 bucket, RDS Postgres, EC2 app host,
+the IAM role (S3 + SES), and security groups. Run it with the AWS CLI:
 
 ```bash
-# on the EC2 box
+aws cloudformation deploy \
+  --template-file deploy-aws-native/infra/cloudformation.yaml \
+  --stack-name ajace-timesheet \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+      VpcId=vpc-xxxx AppSubnetId=subnet-public \
+      DbSubnetIds=subnet-aaa,subnet-bbb \
+      KeyName=your-keypair SSHLocation=YOUR_IP/32 \
+      DBPassword='a-strong-password' BucketName=ajace-ts-files
+aws cloudformation describe-stacks --stack-name ajace-timesheet \
+  --query 'Stacks[0].Outputs' --output table    # note AppPublicIP + DBEndpoint
+```
+> The app subnet must be **public** (auto-assign public IPv4 on). `DeletionPolicy`
+> keeps the S3 bucket and snapshots RDS if you ever delete the stack.
+
+### Phase 2 — bring the app to production (on the EC2 host)
+```bash
+ssh -i your-key.pem ubuntu@<AppPublicIP>
 git clone -b aws-native https://github.com/RW2523/ajace-timesheet-platform.git
 cd ajace-timesheet-platform
-bash deploy-aws-native/scripts/setup.sh                 # node + pm2 + caddy + psql
-
 cp deploy-aws-native/env.production.example app/.env.production
-#   ↳ edit: DATABASE_URL (RDS), AUTH_JWT_SECRET, STORAGE_S3_BUCKET/REGION, OPENROUTER_API_KEY, SITE_URL
-
-cd app && npm ci && npm run build && cd ..
-deploy-aws-native/scripts/migrate.sh                    # create schema in RDS
-pm2 start deploy-aws-native/ecosystem.config.cjs && pm2 save && pm2 startup
-sudo cp deploy-aws-native/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#   ↳ edit: DATABASE_URL (RDS endpoint + DBPassword), AUTH_JWT_SECRET,
+#           STORAGE_S3_BUCKET/REGION, OPENROUTER_API_KEY, SES_FROM_EMAIL, SITE_URL
+bash deploy-aws-native/scripts/bootstrap.sh    # setup + build + migrate + pm2 + caddy
 ```
+
+### Phase 3 — DNS, admin, email
+```bash
+# point timesheet.<domain> A record at <AppPublicIP> (Caddy auto-issues TLS)
+deploy-aws-native/scripts/make-admin.sh you@ajace.com   # first admin
+deploy-aws-native/scripts/ses-test.sh you@ajace.com      # confirm SES delivery
+```
+
+**SES (reset emails):** verify a sender + request production access in the SES
+console (both free — new accounts start in sandbox). The instance already has
+`ses:SendEmail` via the IAM role (`iam/instance-policy.json`).
 
 ## Verify end-to-end (your live test — I can't run RDS/S3 from here)
 

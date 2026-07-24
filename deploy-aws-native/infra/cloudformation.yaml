@@ -1,0 +1,165 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AJACE Timesheet (AWS-only) — provisions the whole AWS side: S3 bucket,
+  RDS PostgreSQL, EC2 app host, an IAM role granting the box S3 + SES, and
+  security groups. After this stack is CREATE_COMPLETE, SSH to the app host
+  and run deploy-aws-native/scripts/bootstrap.sh to bring the app up.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into (your default VPC is fine).
+  AppSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: A PUBLIC subnet (auto-assign public IPv4 ON) for the app host.
+  DbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Two subnets in different AZs for the RDS subnet group.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 key pair for SSH.
+  SSHLocation:
+    Type: String
+    Default: 0.0.0.0/0
+    Description: CIDR allowed to SSH. Use YOUR_IP/32.
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: RDS master password (used in DATABASE_URL).
+  BucketName:
+    Type: String
+    Default: ajace-ts-files
+    Description: Globally-unique S3 bucket name for timesheet files.
+  InstanceType:
+    Type: String
+    Default: t4g.small
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+  UbuntuAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
+
+Resources:
+  FilesBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+
+  AppRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: timesheet-s3-ses
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub 'arn:aws:s3:::${BucketName}/*'
+              - Effect: Allow
+                Action: [s3:ListBucket]
+                Resource: !Sub 'arn:aws:s3:::${BucketName}'
+              - Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: '*'
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref AppRole]
+
+  AppSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Timesheet app host (SSH + HTTP/S)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 22,  ToPort: 22,  CidrIp: !Ref SSHLocation }
+        - { IpProtocol: tcp, FromPort: 80,  ToPort: 80,  CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+
+  DbSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Timesheet RDS (Postgres from the app host only)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 5432, ToPort: 5432, SourceSecurityGroupId: !Ref AppSg }
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Timesheet RDS subnets
+      SubnetIds: !Ref DbSubnetIds
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      Engine: postgres
+      DBInstanceClass: !Ref DBInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      DBName: timesheet
+      MasterUsername: tsadmin
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSg]
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+
+  AppHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref UbuntuAmi
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref AppInstanceProfile
+      SubnetId: !Ref AppSubnetId
+      SecurityGroupIds: [!Ref AppSg]
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 30, VolumeType: gp3 }
+      Tags: [{ Key: Name, Value: ajace-timesheet }]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          apt-get update -y
+          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+          apt-get install -y nodejs git postgresql-client awscli
+          npm i -g pm2
+          echo "Base ready. Next: clone the repo, add app/.env.production, run deploy-aws-native/scripts/bootstrap.sh" > /etc/motd
+
+Outputs:
+  AppPublicIP:
+    Description: Point your DNS A record (timesheet.<domain>) at this.
+    Value: !GetAtt AppHost.PublicIp
+  AppPublicDNS:
+    Value: !GetAtt AppHost.PublicDnsName
+  DBEndpoint:
+    Description: RDS host for DATABASE_URL.
+    Value: !GetAtt Database.Endpoint.Address
+  DATABASE_URL_hint:
+    Value: !Sub 'postgresql://tsadmin:<DBPassword>@${Database.Endpoint.Address}:5432/timesheet'
+  BucketName:
+    Value: !Ref FilesBucket
