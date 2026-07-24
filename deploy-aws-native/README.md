@@ -65,10 +65,12 @@ ssh -i your-key.pem ubuntu@<AppPublicIP>
 git clone -b aws-native https://github.com/RW2523/ajace-timesheet-platform.git
 cd ajace-timesheet-platform
 cp deploy-aws-native/env.production.example app/.env.production
-#   ↳ edit: DATABASE_URL (RDS endpoint + DBPassword), AUTH_JWT_SECRET,
-#           STORAGE_S3_BUCKET/REGION, OPENROUTER_API_KEY, SES_FROM_EMAIL, SITE_URL
-bash deploy-aws-native/scripts/bootstrap.sh    # setup + build + migrate + pm2 + caddy
+#   ↳ edit: DATABASE_URL (RDS endpoint + DBPassword), STORAGE_S3_BUCKET/REGION,
+#           OPENROUTER_API_KEY, SITE_URL, COOKIE_SECURE  (AUTH_JWT_SECRET auto-generates)
+bash deploy-aws-native/scripts/install.sh      # ONE file: setup + build + migrate + pm2 + caddy
 ```
+> `install.sh` is the single all-in-one setup — installs everything, builds,
+> creates the schema, and starts the app. Re-run it any time (idempotent).
 
 ### Phase 3 — access, admin, email
 
@@ -101,6 +103,22 @@ console (both free — new accounts start in sandbox). The instance already has
    ```
 4. **Make yourself admin:** `deploy-aws-native/scripts/make-admin.sh you@ajace.com` → log in again → `/admin` shows all submissions.
 5. **Privacy check (the RLS replacement):** as a second, non-admin user, confirm you see only your own timesheets.
+
+## Manage it (day-2)
+
+| Task | Command | Where |
+|---|---|---|
+| Pre-flight before launch | see [`PREFLIGHT.md`](PREFLIGHT.md) | — |
+| Start/stop/restart the **app** | `scripts/app.sh {start\|stop\|restart\|status\|logs}` | on the box |
+| Start/stop the **whole box** (save compute $) | `scripts/instance.sh {start\|stop\|status\|ip}` | laptop |
+| Deploy code updates | `git pull && scripts/install.sh` | on the box |
+| First admin | `scripts/make-admin.sh you@ajace.com` | on the box |
+| Test reset email | `scripts/ses-test.sh you@ajace.com` | on the box |
+| Nightly DB backup → S3 | `scripts/backup.sh` (add to cron) | on the box |
+| **Tear it all down** (snapshot RDS, keep S3) | `scripts/teardown.sh` | laptop |
+
+> Stopping the instance assigns a **new public IP** on restart (unless you attach
+> an Elastic IP) — re-check with `scripts/instance.sh ip` and update `SITE_URL`.
 
 ## Cost (AWS-only)
 
