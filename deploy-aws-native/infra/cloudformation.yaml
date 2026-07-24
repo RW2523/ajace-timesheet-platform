@@ -44,6 +44,17 @@ Parameters:
   DBInstanceClass:
     Type: String
     Default: db.t4g.micro
+  VolumeSizeGB:
+    Type: Number
+    Default: 50
+    MinValue: 30
+    Description: >
+      Root EBS size. 50 GB gives node_modules + two Next builds room to spare;
+      a build that runs out of disk fails with ENOSPC. ~$4/mo at 50 GB gp3.
+  DBEngineVersion:
+    Type: String
+    Default: '16.4'
+    Description: Pinned so a future default major version can't change under you.
   UbuntuAmi:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id
@@ -62,16 +73,10 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
-      # Browser uploads/downloads go straight to S3 via presigned URLs, so the
-      # bucket must allow cross-origin PUT/GET from the app. Presigned URLs are
-      # the real security boundary (short-lived + signed), so origin "*" is fine.
-      CorsConfiguration:
-        CorsRules:
-          - AllowedOrigins: ["*"]
-            AllowedMethods: [GET, PUT, HEAD]
-            AllowedHeaders: ["*"]
-            ExposeHeaders: [ETag]
-            MaxAge: 3000
+      # No CorsConfiguration on purpose: the browser NEVER talks to S3 directly.
+      # Uploads/downloads are proxied by the app (/api/storage/upload and
+      # /api/storage/get) using the instance role, so there is no cross-origin
+      # request to allow — and no s3:PutBucketCORS permission needed anywhere.
 
   AppRole:
     Type: AWS::IAM::Role
@@ -131,6 +136,7 @@ Resources:
     DeletionPolicy: Snapshot
     Properties:
       Engine: postgres
+      EngineVersion: !Ref DBEngineVersion
       DBInstanceClass: !Ref DBInstanceClass
       AllocatedStorage: '20'
       StorageType: gp3
@@ -155,17 +161,18 @@ Resources:
       SecurityGroupIds: [!Ref AppSg]
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
-          Ebs: { VolumeSize: 30, VolumeType: gp3 }
+          Ebs: { VolumeSize: !Ref VolumeSizeGB, VolumeType: gp3, DeleteOnTermination: true }
       Tags: [{ Key: Name, Value: ajace-timesheet }]
       UserData:
-        Fn::Base64: !Sub |
+        # Deliberately minimal: just git, so you can clone and run install.sh.
+        # (Do NOT apt-get install awscli here — that package does not exist on
+        # Ubuntu 24.04 and would abort UserData. install.sh fetches AWS CLI v2.)
+        # No `set -e`: a hiccup here must never leave an unusable box.
+        Fn::Base64: |
           #!/bin/bash
-          set -e
           apt-get update -y
-          curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-          apt-get install -y nodejs git postgresql-client awscli
-          npm i -g pm2
-          echo "Base ready. Next: clone the repo, add app/.env.production, run deploy-aws-native/scripts/bootstrap.sh" > /etc/motd
+          apt-get install -y git
+          echo "Run: git clone -b aws-native <repo> && cd ajace-timesheet-platform && bash deploy-aws-native/scripts/install.sh" > /etc/motd
 
   # AWS Budgets — the first two budgets are FREE. Alerts by email at thresholds.
   # NOTE: this ALERTS, it does not hard-stop spend. To actually stay under the

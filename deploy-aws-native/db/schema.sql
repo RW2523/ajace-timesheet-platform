@@ -71,7 +71,7 @@ create table if not exists public.ts_timesheets (
   questionnaire    jsonb default '{}'::jsonb,
   validation       jsonb default '{}'::jsonb,
   ai_confidence    numeric,
-  ai_status        text default 'ok' check (ai_status in ('ok','partial','failed')),
+  ai_status        text default 'ok' check (ai_status in ('ok','partial','failed','manual')),
   created_at       timestamptz not null default now(),
   unique (user_id, year, month)
 );
@@ -126,3 +126,12 @@ begin new.updated_at = now(); return new; end; $$;
 drop trigger if exists ts_profiles_touch on public.ts_profiles;
 create trigger ts_profiles_touch before update on public.ts_profiles
   for each row execute function public.ts_touch_updated_at();
+
+-- ---------- migrations for already-provisioned databases ---------------------
+-- `create table if not exists` above skips existing tables, so schema changes
+-- must also be expressed as idempotent ALTERs. Safe to re-run.
+
+-- 'manual' is written by the "Enter manually instead" flow.
+alter table public.ts_timesheets drop constraint if exists ts_timesheets_ai_status_check;
+alter table public.ts_timesheets add constraint ts_timesheets_ai_status_check
+  check (ai_status in ('ok','partial','failed','manual'));

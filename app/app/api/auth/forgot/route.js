@@ -6,10 +6,13 @@ import { sendPasswordReset, emailEnabled } from "@/lib/aws/email";
 export const runtime = "nodejs";
 
 // Issues a one-hour reset token and emails the link via Amazon SES.
-// Always returns ok (don't leak which emails exist). If SES isn't configured,
-// falls back to logging the link so the flow still works in dev.
+// The response never reveals whether the address exists (no account-enumeration
+// oracle); `emailConfigured` is a config-level constant, identical for everyone,
+// so the UI can stop claiming "check your inbox" when SES isn't set up yet.
 export async function POST(request) {
   const { email } = await request.json().catch(() => ({}));
+  const canEmail = emailEnabled();
+
   const u = await queryOne(`select id, email from public.auth_users where lower(email)=lower($1)`, [email || ""]);
   if (u) {
     const token = crypto.randomBytes(32).toString("hex");
@@ -18,16 +21,17 @@ export async function POST(request) {
       [token, u.id]
     );
     const link = `${process.env.SITE_URL || ""}/reset?token=${token}`;
+    let delivered = false;
     try {
-      if (emailEnabled()) {
-        await sendPasswordReset(u.email, link);
-      } else if (process.env.NODE_ENV !== "production") {
-        console.log(`[password reset] ${link}`);
-      }
+      if (canEmail) { await sendPasswordReset(u.email, link); delivered = true; }
     } catch (e) {
-      // don't fail the request if email delivery hiccups; log for the operator
       console.error("SES send failed:", e?.message || e);
     }
+    // Opt-in fallback so an operator can still recover an account before SES is
+    // live. Off by default: a live reset token in the logs is a credential.
+    if (!delivered && process.env.AUTH_LOG_RESET_LINKS === "1") {
+      console.warn(`[password reset] ${u.email} -> ${link}`);
+    }
   }
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, emailConfigured: canEmail });
 }

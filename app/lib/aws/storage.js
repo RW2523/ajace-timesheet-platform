@@ -20,13 +20,9 @@ export const keyFor = (path) => `${PREFIX}/${path}`; // path = {userId}/{YYYY-MM
 export async function signedGetUrl(path, expiresIn = 120) {
   return getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: keyFor(path) }), { expiresIn });
 }
-export async function signedPutUrl(path, contentType, expiresIn = 120) {
-  return getSignedUrl(
-    s3,
-    new PutObjectCommand({ Bucket: BUCKET, Key: keyFor(path), ContentType: contentType }),
-    { expiresIn }
-  );
-}
+// NOTE: there is deliberately no presigned-PUT helper. Uploads are proxied
+// through /api/storage/upload so the browser never talks to S3 directly — that
+// is what removes the need for bucket CORS entirely.
 export async function putObject(path, body, contentType) {
   await s3.send(new PutObjectCommand({
     Bucket: BUCKET, Key: keyFor(path), Body: body,

@@ -3,6 +3,7 @@
 import bcrypt from "bcryptjs";
 import { cookies } from "next/headers";
 import { SESSION_COOKIE, signSession, verifySession } from "./jwt";
+import { queryOne } from "./db";
 
 export { SESSION_COOKIE, signSession, verifySession };
 
@@ -35,8 +36,27 @@ export async function clearSessionCookie() {
   (await cookies()).set(SESSION_COOKIE, "", { ...cookieBase(), maxAge: 0 });
 }
 
-// current logged-in user from the cookie, or null
+// Current logged-in user from the cookie, or null.
+// The ROLE is re-read from the database on every call rather than trusted from
+// the 7-day JWT: otherwise promoting someone with make-admin.sh has no effect
+// until they manually log out and back in (admin storage/reads would 403/404),
+// and a demoted admin would keep admin powers until their token expired.
 export async function currentUser() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  return verifySession(token);
+  const claims = await verifySession(token);
+  if (!claims) return null;
+  try {
+    const row = await queryOne(
+      `select u.id, u.email, coalesce(p.role, u.role, 'employee') as role
+         from public.auth_users u
+         left join public.ts_profiles p on p.id = u.id
+        where u.id = $1`,
+      [claims.id]
+    );
+    if (!row) return null; // user deleted -> session is no longer valid
+    return { id: row.id, email: row.email, role: row.role };
+  } catch {
+    // DB blip: stay authenticated but fail CLOSED on privilege
+    return { ...claims, role: "employee" };
+  }
 }

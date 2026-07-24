@@ -11,7 +11,13 @@ async function dataRunner(st) {
   const res = await fetch("/api/data", {
     method: "POST", headers: JSON_HEADERS, body: JSON.stringify(st),
   });
-  return res.json().catch(() => ({ data: null, error: "bad response" }));
+  const j = await res.json().catch(() => ({ data: null, error: "bad response" }));
+  // /api/data reports `error` as a plain string; callers read `error.message`.
+  // Normalise to the { message } shape so failures are readable, not `undefined`.
+  if (j && j.error) {
+    return { data: null, error: wrapErr(typeof j.error === "string" ? j.error : j.error.message) };
+  }
+  return j;
 }
 
 export function createClient() {

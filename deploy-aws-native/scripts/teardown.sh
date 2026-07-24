@@ -5,8 +5,17 @@
 # Overrides: STACK=, REGION=, KEY=
 set -euo pipefail
 STACK="${STACK:-ajace-timesheet}"
-REGION="${REGION:-us-east-2}"
+# Default to the caller's configured region rather than a hard-coded one — a
+# mismatch here silently "succeeds" while deleting nothing and leaving you billed.
+REGION="${REGION:-$(aws configure get region 2>/dev/null || echo us-east-1)}"
 KEY="${KEY:-ajace-key}"
+
+if ! aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" >/dev/null 2>&1; then
+  echo "✗ No stack '$STACK' in region '$REGION'."
+  echo "  Nothing was deleted. Set the right region and re-run, e.g.:"
+  echo "     REGION=us-east-2 $0"
+  exit 1
+fi
 
 BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
   --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text 2>/dev/null || true)

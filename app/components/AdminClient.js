@@ -217,6 +217,7 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
   const [preview, setPreview] = useState(false);
   // Some documents only provide SUMMARY totals (weekly rows / a stated month
   // total) with no per-day breakdown -- their day grid is empty, so recomputing
@@ -244,7 +245,10 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
       questionnaire: q, validation: edit.validation || {}, note: note || null,
     });
     setSaving(false);
-    if (!error) { setSaved(true); setTimeout(() => (onSaved ? onSaved() : onClose()), 900); }
+    if (error) { setSaveErr(error.message || "couldn't save this revision"); return; }
+    setSaveErr("");
+    setSaved(true);
+    setTimeout(() => (onSaved ? onSaved() : onClose()), 900);
   }
 
   return (
@@ -308,6 +312,7 @@ function SubmissionDetail({ edit, profile, adminProfile, sourceFile, supabase, o
             <label>Admin note (why you changed it)</label>
             <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Corrected Apr 14 — client confirmed 8h" />
           </div>
+          {saveErr && <div className="alert error" style={{ margin: "10px 0" }}>{saveErr}</div>}
           <div className="between">
             <span className="muted" style={{ fontSize: 12 }}>Saved as a separate admin revision; the employee’s submission is preserved.</span>
             <div className="row">
@@ -479,12 +484,13 @@ function FlowPicker({ supabase, adminId, initial }) {
   async function choose(next) {
     if (next === flow || saving) return;
     setSaving(true); setSaved("");
+    // updated_at is refreshed server-side on conflict; there is no updated_by column
     const { error } = await supabase.from("ts_app_settings").upsert(
-      { key: "ai_flow", value: next, updated_at: new Date().toISOString(), updated_by: adminId },
+      { key: "ai_flow", value: next },
       { onConflict: "key" }
     );
     setSaving(false);
-    if (error) { setSaved("Failed to save: " + error.message); return; }
+    if (error) { setSaved("Failed to save: " + (error.message || error)); return; }
     setFlow(next);
     setSaved("Saved ✓ — new uploads will use the " + next + " flow.");
   }

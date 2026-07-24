@@ -5,6 +5,10 @@ import { query } from "./db";
 
 // Per-table policy. `owner` = the column that ties a row to a user.
 // `write` = columns a client may set. adminRead = admins may read all rows.
+// `json` = jsonb columns; these MUST be JSON.stringify'd before binding, because
+// node-pg encodes a top-level JS Array as a Postgres array literal ({...,...}),
+// which jsonb then rejects with "invalid input syntax for type json". Note that
+// ts_timesheets.projects is text[], NOT jsonb — it must stay a raw JS array.
 const T = {
   ts_profiles: {
     owner: "id", adminRead: true,
@@ -16,18 +20,22 @@ const T = {
   },
   ts_timesheets: {
     owner: "user_id", adminRead: true, upsertKeys: ["user_id,year,month"],
+    json: ["days","questionnaire","validation"],
     write: ["user_id","file_id","month","year","employee_name","employee_id","client","projects","monthly_regular","monthly_overtime","monthly_total","days_worked","days","questionnaire","validation","ai_confidence","ai_status"],
   },
   ts_employee_edits: {
     owner: "user_id", adminRead: true,
+    json: ["fields","days","questionnaire","validation"],
     write: ["timesheet_id","user_id","month","year","fields","days","questionnaire","validation","submitted"],
   },
   ts_admin_edits: {
     owner: "admin_user_id", adminOnly: true,
+    json: ["fields","days","questionnaire","validation"],
     write: ["timesheet_id","employee_user_id","admin_user_id","month","year","fields","days","questionnaire","validation","note"],
   },
   ts_app_settings: {
     key: "key", publicRead: true, adminWrite: true,
+    upsertKeys: ["key"], touch: "updated_at",
     write: ["key","value"],
   },
 };
@@ -40,13 +48,26 @@ export async function execute(user, body) {
     const isAdmin = user.role === "admin";
     if (cfg.adminOnly && !isAdmin) return { data: null, error: "forbidden" };
 
-    const readable = new Set([...(cfg.write || []), "id", "created_at", cfg.owner, cfg.key].filter(Boolean));
+    // Table-level write gate. Covers DELETE too — cleanValues() is only reached
+    // by insert/upsert/update, so without this a non-admin could delete rows of
+    // an admin-only, owner-less table (ts_app_settings).
+    const MUTATING = op === "insert" || op === "upsert" || op === "update" || op === "delete";
+    if (cfg.adminWrite && MUTATING && !isAdmin) return { data: null, error: "forbidden" };
+
+    const readable = new Set([...(cfg.write || []), "id", "created_at", cfg.owner, cfg.key, cfg.touch].filter(Boolean));
     const ident = (c) => {
       if (!/^[a-z_][a-z0-9_]*$/.test(c) || !readable.has(c)) throw new Error(`bad column: ${c}`);
       return `"${c}"`;
     };
     const params = [];
     const P = (v) => { params.push(v); return `$${params.length}`; };
+
+    // An owner-less table (e.g. ts_app_settings) has nothing to scope a mutation
+    // by, so an update/delete without its key filter would hit every row.
+    if ((op === "update" || op === "delete") && !cfg.owner) {
+      const fcols = (body.filters || []).map((f) => f.col);
+      if (!cfg.key || !fcols.includes(cfg.key)) throw new Error("unscoped mutation refused");
+    }
 
     const buildWhere = (scope = true) => {
       const w = [];
@@ -64,11 +85,13 @@ export async function execute(user, body) {
     };
 
     // enforce writable columns + force owner + block role escalation
+    const jsonCols = new Set(cfg.json || []);
     const cleanValues = (obj) => {
       const out = {};
       for (const [k, v] of Object.entries(obj || {})) {
         if (!(cfg.write || []).includes(k)) continue;
-        out[k] = v;
+        // jsonb columns must be serialised; everything else (incl. text[]) binds raw
+        out[k] = jsonCols.has(k) && v !== null && v !== undefined ? JSON.stringify(v) : v;
       }
       if (cfg.owner === "id") out.id = user.id;
       else if (cfg.owner) out[cfg.owner] = user.id;
@@ -108,7 +131,9 @@ export async function execute(user, body) {
           if (!(cfg.upsertKeys || []).includes(oc)) throw new Error("bad onConflict");
           const setList = keys.filter((k) => !oc.split(",").includes(k))
             .map((k) => `${ident(k)} = excluded.${ident(k)}`).join(", ");
-          conflict = ` on conflict (${oc}) do update set ${setList}`;
+          // column defaults only fire on INSERT, so refresh the timestamp here
+          const touch = cfg.touch ? `, ${ident(cfg.touch)} = now()` : "";
+          conflict = ` on conflict (${oc}) do update set ${setList}${touch}`;
         }
         sql = `insert into public.${table} (${colList}) values (${valList})${conflict} returning *`;
         rows = await query(sql, params);
