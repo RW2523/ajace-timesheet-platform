@@ -1,25 +1,40 @@
 #!/usr/bin/env bash
-# Delete the whole AWS stack when the pilot ends. Your DATA SURVIVES:
-#   • RDS  -> a FINAL SNAPSHOT is kept (DeletionPolicy: Snapshot)
-#   • S3   -> the bucket is RETAINED (DeletionPolicy: Retain)
-#   • EC2, IAM role, security groups -> removed
-# Run from your LAPTOP (needs AWS CLI).
+# DELETE EVERYTHING for this deployment. Run from your LAPTOP (needs admin AWS
+# creds — the EC2 box's role can't delete infrastructure).
 #   deploy-aws-native/scripts/teardown.sh
+# Overrides: STACK=, REGION=, KEY=
 set -euo pipefail
 STACK="${STACK:-ajace-timesheet}"
+REGION="${REGION:-us-east-2}"
+KEY="${KEY:-ajace-key}"
 
-echo "About to DELETE CloudFormation stack: $STACK"
-echo "  EC2 app host + security groups + IAM role  ->  REMOVED"
-echo "  RDS database                                ->  FINAL SNAPSHOT kept, instance removed"
-echo "  S3 bucket (uploaded files)                  ->  RETAINED"
-echo
-read -r -p "Type the stack name ('$STACK') to confirm: " CONFIRM
-[ "$CONFIRM" = "$STACK" ] || { echo "aborted."; exit 1; }
+BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" \
+  --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" --output text 2>/dev/null || true)
 
-aws cloudformation delete-stack --stack-name "$STACK"
-echo "Delete requested. Track it with:"
-echo "  aws cloudformation wait stack-delete-complete --stack-name $STACK"
-echo
-echo "Kept afterward (tiny storage cost ~\$1/mo): the RDS final snapshot + the S3 bucket."
-echo "To come back later: re-deploy the stack, then restore the DB from the snapshot"
-echo "(console: RDS > Snapshots > Restore) or point a new DBInstance at it."
+echo "This DELETES EVERYTHING for '$STACK' in $REGION — NOTHING is kept:"
+echo "  • EC2, RDS (no final snapshot), IAM role, security groups, budget"
+echo "  • S3 bucket + ALL files: ${BUCKET:-<none found>}"
+echo "  • SSH key pair: $KEY"
+read -r -p "Type DELETE to confirm: " c
+[ "$c" = "DELETE" ] || { echo "aborted."; exit 1; }
+
+if [ -n "$BUCKET" ] && [ "$BUCKET" != "None" ]; then
+  echo "==> emptying + deleting bucket $BUCKET"
+  aws s3 rm "s3://$BUCKET" --recursive --region "$REGION" || true
+  aws s3api delete-bucket --bucket "$BUCKET" --region "$REGION" || true
+fi
+
+echo "==> deleting stack (RDS is snapshotted during delete; removed next)"
+aws cloudformation delete-stack --stack-name "$STACK" --region "$REGION"
+aws cloudformation wait stack-delete-complete --stack-name "$STACK" --region "$REGION" || true
+
+echo "==> deleting any leftover RDS snapshots"
+for s in $(aws rds describe-db-snapshots --snapshot-type manual --region "$REGION" \
+    --query "DBSnapshots[?starts_with(DBInstanceIdentifier,'$STACK')].DBSnapshotIdentifier" --output text 2>/dev/null); do
+  aws rds delete-db-snapshot --db-snapshot-identifier "$s" --region "$REGION" && echo "   deleted $s"
+done
+
+echo "==> deleting key pair $KEY"
+aws ec2 delete-key-pair --key-name "$KEY" --region "$REGION" || true
+
+echo "✅ Everything deleted for $STACK."
