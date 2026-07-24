@@ -1,32 +1,53 @@
-import { createServerClient } from "@supabase/ssr";
-import { cookies } from "next/headers";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config";
+// Drop-in replacement for the Supabase server client — backed directly by our
+// AWS-native libs (RDS + S3). Same shape (`.auth`, `.from`, `.storage`) so
+// server components / route handlers keep working without edits.
+import { currentUser } from "@/lib/aws/auth";
+import { execute } from "@/lib/aws/data";
+import { makeBuilder } from "@/lib/aws/builder";
+import { signedGetUrl, getObjectBytes, deleteObjects } from "@/lib/aws/storage";
 
-// Server-side Supabase client (route handlers, server components). Reads/writes
-// the auth cookies so the session is available on the server.
 export async function createClient() {
-  const cookieStore = await cookies();
-  // Share the session cookie across *.ajace.com subdomains for SSO (set in prod only).
-  const cookieDomain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
-  return createServerClient(
-    SUPABASE_URL,
-    SUPABASE_ANON_KEY,
-    {
-      ...(cookieDomain ? { cookieOptions: { domain: cookieDomain } } : {}),
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            // called from a Server Component — safe to ignore (middleware refreshes)
-          }
-        },
+  const user = await currentUser();
+  const requireUser = () => {
+    if (!user) throw new Error("not authenticated");
+    return user;
+  };
+
+  return {
+    auth: {
+      async getUser() {
+        return { data: { user: user ? { id: user.id, email: user.email, role: user.role } : null }, error: null };
       },
-    }
-  );
+      // present for API-compat; recovery is token-based now (see /reset)
+      async exchangeCodeForSession() { return { error: null }; },
+    },
+
+    from: (table) => makeBuilder(table, (st) => execute(requireUser(), st)),
+
+    storage: {
+      from() {
+        const canReach = (path) => {
+          const u = requireUser();
+          return String(path).split("/")[0] === u.id || u.role === "admin";
+        };
+        return {
+          async createSignedUrl(path, expiresIn) {
+            if (!canReach(path)) return { data: null, error: { message: "forbidden" } };
+            return { data: { signedUrl: await signedGetUrl(path, expiresIn) }, error: null };
+          },
+          async download(path) {
+            if (!canReach(path)) return { data: null, error: { message: "forbidden" } };
+            const bytes = await getObjectBytes(path);
+            return { data: new Blob([bytes]), error: null };
+          },
+          async remove(paths) {
+            const u = requireUser();
+            const allowed = paths.filter((p) => String(p).split("/")[0] === u.id || u.role === "admin");
+            await deleteObjects(allowed);
+            return { data: null, error: null };
+          },
+        };
+      },
+    },
+  };
 }

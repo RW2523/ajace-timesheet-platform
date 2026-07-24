@@ -1,43 +1,15 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse } from "next/server";
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./config";
+import { verifySession, SESSION_COOKIE } from "@/lib/aws/jwt";
 
-// Refreshes the Supabase auth session on every request and guards routes.
+// Edge-safe route guard: verify the session JWT cookie and gate routes.
+// (jose only — no bcrypt / no next/headers — so it runs in the Edge runtime.)
 export async function updateSession(request) {
-  let response = NextResponse.next({ request });
-
-  // Share the session cookie across *.ajace.com subdomains for SSO (set in prod only).
-  const cookieDomain = process.env.NEXT_PUBLIC_COOKIE_DOMAIN;
-  const supabase = createServerClient(
-    SUPABASE_URL,
-    SUPABASE_ANON_KEY,
-    {
-      ...(cookieDomain ? { cookieOptions: { domain: cookieDomain } } : {}),
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
-  );
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const token = request.cookies.get(SESSION_COOKIE)?.value;
+  const user = await verifySession(token);
 
   const path = request.nextUrl.pathname;
   const isAuthPage = path.startsWith("/login") || path.startsWith("/signup");
-  const isProtected =
-    path.startsWith("/dashboard") || path.startsWith("/admin");
+  const isProtected = path.startsWith("/dashboard") || path.startsWith("/admin");
 
   if (!user && isProtected) {
     const url = request.nextUrl.clone();
@@ -49,6 +21,5 @@ export async function updateSession(request) {
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
   }
-
-  return response;
+  return NextResponse.next({ request });
 }

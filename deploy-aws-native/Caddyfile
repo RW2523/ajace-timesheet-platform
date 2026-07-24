@@ -1,0 +1,15 @@
+# Automatic HTTPS + reverse proxy to the Next app on :3009.
+# Put your hostname + ACME email in, point the DNS A record at the EC2 IP.
+{
+	email admin@ajace.com
+}
+
+timesheet.ajace.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:3009
+}
+
+# No domain yet? Comment the block above and use plain HTTP on the EC2 IP:
+# :80 {
+# 	reverse_proxy 127.0.0.1:3009
+# }
