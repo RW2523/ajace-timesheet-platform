@@ -62,6 +62,16 @@ Resources:
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      # Browser uploads/downloads go straight to S3 via presigned URLs, so the
+      # bucket must allow cross-origin PUT/GET from the app. Presigned URLs are
+      # the real security boundary (short-lived + signed), so origin "*" is fine.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ["*"]
+            AllowedMethods: [GET, PUT, HEAD]
+            AllowedHeaders: ["*"]
+            ExposeHeaders: [ETag]
+            MaxAge: 3000
 
   AppRole:
     Type: AWS::IAM::Role

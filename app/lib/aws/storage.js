@@ -8,7 +8,10 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 const REGION = process.env.STORAGE_S3_REGION || "us-east-1";
 const BUCKET = process.env.STORAGE_S3_BUCKET;
 // Credentials come from the EC2 instance IAM role (default provider chain).
-const s3 = new S3Client({ region: REGION });
+// requestChecksumCalculation:"WHEN_REQUIRED" stops the SDK from baking a CRC32
+// checksum into presigned PUT URLs — that checksum is computed without the body
+// at signing time, so the browser's real upload would never match it (403/400).
+const s3 = new S3Client({ region: REGION, requestChecksumCalculation: "WHEN_REQUIRED" });
 
 // Bucket prefix so keys read like the old Supabase bucket path.
 export const PREFIX = "ts-uploads";
