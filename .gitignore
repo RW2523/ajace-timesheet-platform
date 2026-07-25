@@ -46,3 +46,7 @@ out/
 
 # stray archives / working copies
 *.zip
+
+# aws-cli deploy bookkeeping
+deploy-aws-native/.aws-state*
+*.pem

@@ -18,7 +18,7 @@ export default function DashboardClient({ profile }) {
 
   // AI document processing needs the separately-hosted Python engine. When it's
   // not configured (e.g. on Vercel), the app degrades to manual entry only.
-  const AI_ENABLED = process.env.NEXT_PUBLIC_AI_ENABLED === "true";
+  const AI_ENABLED = ["true", "1"].includes(process.env.NEXT_PUBLIC_AI_ENABLED);
 
   const [period, setPeriod] = useState(defaultPeriod());
   const { month, year } = period;
@@ -35,6 +35,8 @@ export default function DashboardClient({ profile }) {
 
   const [processing, setProcessing] = useState(false);
   const [processError, setProcessError] = useState("");
+  // non-fatal: the hours still save, but the original document didn't attach
+  const [attachWarn, setAttachWarn] = useState("");
   const [aiMeta, setAiMeta] = useState(null);
 
   const [fields, setFields] = useState({
@@ -115,9 +117,12 @@ export default function DashboardClient({ profile }) {
     if (storedRef.current?.fileName === f.name) return storedRef.current.path;
     const ext = f.name.includes(".") ? f.name.split(".").pop() : "bin";
     const path = `${uid}/${year}-${String(month).padStart(2, "0")}/${Date.now()}.${ext}`;
-    await supabase.storage.from("ts-uploads").upload(path, f, {
+    const { error } = await supabase.storage.from("ts-uploads").upload(path, f, {
       contentType: f.type || "application/octet-stream", upsert: true,
     });
+    // Only memoize on success, so a retry actually re-uploads instead of
+    // recording a storage_path that points at a key which was never written.
+    if (error) throw new Error(`couldn't save your file (${error.message || "upload failed"})`);
     storedRef.current = { fileName: f.name, path };
     return path;
   }
@@ -127,10 +132,20 @@ export default function DashboardClient({ profile }) {
     if (!file) return;
     setProcessing(true);
     setProcessError("");
+    setAttachWarn("");
     let storagePath = null;
     try {
-      // 1) keep the source in storage (memoized -- never re-uploads)
-      storagePath = await ensureStored(file);
+      // 1) keep the source in storage (memoized -- never re-uploads).
+      // A storage failure must NOT abort extraction: carry on with a null path
+      // so we never record a ts_files row pointing at a key that isn't there.
+      try {
+        storagePath = await ensureStored(file);
+      } catch (e) {
+        storagePath = null;
+        setAttachWarn(
+          `${e.message || e} — your hours will still be saved, but your manager won't see the original document.`
+        );
+      }
 
       // 2) run the engine
       const fd = new FormData();
@@ -193,11 +208,17 @@ export default function DashboardClient({ profile }) {
     // can cross-verify the submission against the original document -- manual
     // entry included (previously only when AI was disabled, which left admins
     // with nothing to preview for manual submissions).
+    setAttachWarn("");
     if (file) {
       try {
         const storagePath = await ensureStored(file);
         await saveBaseline({ cal: emptyCal, emp: null, storagePath, file, aiStatus: "manual", confidence: null });
-      } catch { /* non-fatal: proceed to manual entry regardless */ }
+      } catch (e) {
+        // non-fatal: proceed to manual entry, but say so instead of going quiet
+        setAttachWarn(
+          `${e.message || e} — you can still enter your hours, but your manager won't see the original document.`
+        );
+      }
     }
     setCalendar(emptyCal);
     setQ({ regularHours: "", overtimeHours: "", workedWeekends: "" });
@@ -210,7 +231,7 @@ export default function DashboardClient({ profile }) {
   async function saveBaseline({ cal, emp, storagePath, file, aiStatus, confidence }) {
     let fileId = null;
     if (storagePath && file) {
-      const { data: fr } = await supabase
+      const { data: fr, error: fileErr } = await supabase
         .from("ts_files")
         .insert({
           user_id: uid, month, year, file_name: file.name,
@@ -218,10 +239,11 @@ export default function DashboardClient({ profile }) {
           size_bytes: file.size || null, status: "processed",
         })
         .select("id").single();
+      if (fileErr) throw new Error(fileErr.message || "couldn't record the uploaded file");
       fileId = fr?.id || null;
     }
     const r = rollup(cal);
-    const { data: tr } = await supabase
+    const { data: tr, error: tsErr } = await supabase
       .from("ts_timesheets")
       .upsert(
         {
@@ -238,6 +260,10 @@ export default function DashboardClient({ profile }) {
         { onConflict: "user_id,year,month" }
       )
       .select("id").single();
+    // Never swallow this: if it fails, ensureTimesheet() would return undefined
+    // and the submission below would be written with a NULL timesheet_id,
+    // silently detaching it from the source document in the admin console.
+    if (tsErr) throw new Error(tsErr.message || "couldn't save your timesheet");
     if (tr?.id) setTimesheetId(tr.id);
     return tr?.id;
   }
@@ -246,7 +272,7 @@ export default function DashboardClient({ profile }) {
     if (timesheetId) return timesheetId;
     return saveBaseline({
       cal: calendar, emp: null, storagePath: null, file: null,
-      aiStatus: "failed", confidence: null,
+      aiStatus: "manual", confidence: null,
     });
   }
 
@@ -317,6 +343,14 @@ export default function DashboardClient({ profile }) {
 
         {savedMsg && <div className="alert ok" style={{ marginBottom: 16 }}>{savedMsg}
           <a style={{ marginLeft: "auto" }} onClick={resetForNew} role="button">Start another</a></div>}
+
+        {/* Shown in BOTH steps: UploadStep renders processError itself, but a
+            failure while submitting from the review step had no render site,
+            so a failed submit used to show the user nothing at all. */}
+        {attachWarn && <div className="alert" style={{ marginBottom: 16 }}>{attachWarn}</div>}
+        {processError && mode === "review" && (
+          <div className="alert error" style={{ marginBottom: 16 }}>{processError}</div>
+        )}
 
         {mode === "upload" && (
           <UploadStep
